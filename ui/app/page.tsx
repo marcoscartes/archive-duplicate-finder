@@ -144,7 +144,7 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
         <p className="text-sm font-bold text-gray-200 truncate">{file.name}</p>
         <p className="text-[10px] text-gray-500 font-medium truncate opacity-60 uppercase tracking-tighter">{file.path}</p>
       </div>
-      <div className="flex gap-2 opacity-0 group-hover/file:opacity-100 transition-opacity">
+      <div className="flex gap-2">
         <button
           onClick={(e) => handleOpen(e, 'reveal')}
           className="p-2 bg-blue-500/10 hover:bg-blue-500/20 rounded-lg text-blue-400 transition-all"
