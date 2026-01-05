@@ -45,31 +45,34 @@ func main() {
 	// Parse command line flags
 	config := parseFlags()
 
+	// Configure logger with timestamps
+	log.SetFlags(log.Ldate | log.Ltime)
+
 	// Validate directory
 	if _, err := os.Stat(config.Directory); os.IsNotExist(err) {
 		log.Fatalf("❌ Directory does not exist: %s", config.Directory)
 	}
 
-	fmt.Printf("🔍 Archive Duplicate Finder\n")
-	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-	fmt.Printf("📂 Scanning directory: %s\n", config.Directory)
-	fmt.Printf("🎯 Similarity threshold: %d%%\n", config.Threshold)
-	fmt.Printf("🔧 Mode: %s\n", config.Mode)
+	log.Printf("🔍 Archive Duplicate Finder")
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	log.Printf("📂 Scanning directory: %s", config.Directory)
+	log.Printf("🎯 Similarity threshold: %d%%", config.Threshold)
+	log.Printf("🔧 Mode: %s", config.Mode)
 	if config.DeleteMode != "" {
-		fmt.Printf("🗑️  Cleanup Mode: %s (Auto: %v)\n", config.DeleteMode, config.AutoDelete)
+		log.Printf("🗑️  Cleanup Mode: %s (Auto: %v)", config.DeleteMode, config.AutoDelete)
 	}
 	fmt.Printf("\n")
 
 	startTime := time.Now()
 
 	// Step 1: Scan for archive files
-	fmt.Println("📦 Step 1: Scanning for archive files...")
+	log.Println("📦 Step 1: Scanning for archive files...")
 	files, err := scanner.ScanDirectory(config.Directory, config.Recursive)
 	if err != nil {
 		log.Fatalf("❌ Failed to scan directory: %v", err)
 	}
 
-	fmt.Printf("✅ Found %d archive files\n", len(files))
+	log.Printf("✅ Found %d archive files", len(files))
 	scanner.PrintFileStats(files)
 	fmt.Println()
 
@@ -97,7 +100,7 @@ func main() {
 	var finalSizeGroups []reporter.SizeGroup
 	if config.Mode == "all" || config.Mode == "size" {
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		fmt.Println("🔄 Step 2: Analyzing identical sizes...")
+		log.Println("🔄 Step 2: Analyzing identical sizes...")
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		finalSizeGroups = analyzeSameSizeDifferentName(sizeGroups, config.Threshold, config.Verbose, config)
 
@@ -129,9 +132,9 @@ func main() {
 	if config.Mode == "all" || config.Mode == "name" {
 		fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		if config.Interactive {
-			fmt.Println("📝 Step 3: Similar name analysis (Interactive Mode)")
+			log.Println("📝 Step 3: Similar name analysis (Interactive Mode)")
 		} else {
-			fmt.Println("📝 Step 3: Similar name analysis started in BACKGROUND...")
+			log.Println("📝 Step 3: Similar name analysis started in BACKGROUND...")
 		}
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
@@ -194,11 +197,11 @@ func main() {
 	}
 
 	elapsedTotal := time.Since(startTime)
-	fmt.Printf("\n📈 Total processing time: %.2fs\n", elapsedTotal.Seconds())
+	log.Printf("📈 Total processing time: %.2fs", elapsedTotal.Seconds())
 
 	// If web server is running, block indefinitely to keep it alive
 	if config.Web {
-		fmt.Println("\n📡 Dashboard is ACTIVE. Press Ctrl+C to shutdown.")
+		log.Println("📡 Dashboard is ACTIVE. Press Ctrl+C to shutdown.")
 		select {}
 	}
 }

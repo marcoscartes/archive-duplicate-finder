@@ -4,6 +4,7 @@ import (
 	"archive-duplicate-finder/internal/archive"
 	"archive-duplicate-finder/internal/reporter"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,17 +143,17 @@ func (s *Server) Start() error {
 		defer s.mu.Unlock()
 
 		// 1. Perform FS action
-		fmt.Printf("🗑️ Dashboard Request: Delete %s\n", req.Path)
+		log.Printf("🗑️ Dashboard Request: Delete %s", req.Path)
 		if s.trashPath != "" {
 			if _, err := os.Stat(s.trashPath); os.IsNotExist(err) {
 				os.MkdirAll(s.trashPath, 0755)
 			}
 			dest := filepath.Join(s.trashPath, filepath.Base(req.Path))
-			fmt.Printf("📦 Moving to trash: %s -> %s\n", req.Path, dest)
+			log.Printf("📦 Moving to trash: %s -> %s", req.Path, dest)
 			if err := os.Rename(req.Path, dest); err != nil {
-				fmt.Printf("⚠️ Rename failed: %v. Trying Remove...\n", err)
+				log.Printf("⚠️ Rename failed: %v. Trying Remove...", err)
 				if err := os.Remove(req.Path); err != nil {
-					fmt.Printf("❌ Delete failed: %v\n", err)
+					log.Printf("❌ Delete failed: %v", err)
 					return c.Status(500).SendString(err.Error())
 				}
 			}
@@ -162,9 +163,9 @@ func (s *Server) Start() error {
 				_ = os.WriteFile(refPath, []byte(content), 0644)
 			}
 		} else {
-			fmt.Printf("🔥 Permanently deleting: %s\n", req.Path)
+			log.Printf("🔥 Permanently deleting: %s", req.Path)
 			if err := os.Remove(req.Path); err != nil {
-				fmt.Printf("❌ Delete failed: %v\n", err)
+				log.Printf("❌ Delete failed: %v", err)
 				return c.Status(500).SendString(err.Error())
 			}
 		}
@@ -199,7 +200,7 @@ func (s *Server) Start() error {
 		}
 		s.report.SizeGroups = newSizeGroups
 
-		fmt.Println("✅ Report state updated successfully")
+		log.Println("✅ Report state updated successfully")
 		return c.SendStatus(200)
 	})
 
@@ -211,6 +212,6 @@ func (s *Server) Start() error {
 		return c.Status(200).SendString("Archive Duplicate Finder Dashboard API is running")
 	})
 
-	fmt.Printf("\n🚀 Web Dashboard available at: http://localhost%s\n", s.addr)
+	log.Printf("🚀 Web Dashboard available at: http://localhost%s", s.addr)
 	return app.Listen(s.addr)
 }
