@@ -11,6 +11,7 @@ type Report struct {
 	TotalFiles       int           `json:"total_files"`
 	SizeGroups       []SizeGroup   `json:"size_groups"`
 	SimilarPairs     []SimilarPair `json:"similar_pairs"`
+	SimilarCount     int           `json:"similar_count"`
 	AnalysisDuration float64       `json:"analysis_duration_seconds"`
 	Timestamp        string        `json:"timestamp"`
 	Status           string        `json:"status"` // "analyzing", "finished"

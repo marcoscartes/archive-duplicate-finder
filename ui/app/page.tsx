@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Box,
@@ -176,14 +176,35 @@ function FileItem({ file }: { file: FileInfo }) {
 }
 
 export default function Dashboard() {
+  const [mounted, setMounted] = useState(false)
   const [data, setData] = useState<Report | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [selectedItem, setSelectedItem] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [fileType, setFileType] = useState('all')
-  const [status, setStatus] = useState<string | null>(null) // New state for status
-  const [notified, setNotified] = useState(false) // New state for notification
+  const [status, setStatus] = useState<string | null>(null)
+  const [notified, setNotified] = useState(false)
+  const [viewMode, setViewMode] = useState<'size' | 'similar'>('size')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage, setItemsPerPage] = useState(50)
+
+  // Global error listener for debugging
+  useEffect(() => {
+    setMounted(true)
+    const handleError = (e: ErrorEvent) => {
+      console.error("Global captured error:", e.error)
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('last_error', JSON.stringify({
+          message: e.message,
+          stack: e.error?.stack,
+          timestamp: new Date().toISOString()
+        }))
+      }
+    }
+    window.addEventListener('error', handleError)
+    return () => window.removeEventListener('error', handleError)
+  }, [])
+
 
   const requestNotificationPermission = () => {
     if ('Notification' in window) {
@@ -192,40 +213,103 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
+    if (!mounted) return
+
     const fetchData = async () => {
       try {
         const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
         const response = await fetch(`${apiHost}/api/report`)
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+
         const report: Report = await response.json()
+        console.log("📊 Data received:", {
+          files: report.total_files,
+          sizeGroups: report.size_groups?.length || 0,
+          similarPairs: report.similar_pairs?.length || 0
+        })
+
         setData(report)
 
-        // Handle notification
-        // Only notify if status transitions from 'analyzing' to 'finished' and not already notified
         if (report.status === 'finished' && status === 'analyzing' && !notified) {
-          if (Notification.permission === 'granted') {
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
             new Notification('🔍 Analysis Complete!', {
-              body: `Found ${report.similar_pairs.length} similar file pairs.`,
+              body: `Found ${report.similar_pairs?.length || 0} similar file pairs.`,
               icon: '/favicon.ico'
             })
           }
           setNotified(true)
         }
 
-        setStatus(report.status || null)
+        setStatus(report.status || 'finished')
         setLoading(false)
       } catch (err) {
-        console.error(err)
-        setError("Could not connect to the Archive Finder backend. Make sure it's running with the -web flag.")
+        console.error("❌ Fetch error:", err)
+        setError(err instanceof Error ? err.message : String(err))
         setLoading(false)
       }
     }
 
-    fetchData() // Initial fetch
-    const interval = setInterval(fetchData, 3000) // Poll every 3 seconds
-    return () => clearInterval(interval) // Cleanup interval on component unmount
-  }, [status, notified]) // Dependencies for useEffect
+    fetchData()
+    const interval = setInterval(fetchData, 5000)
+    return () => clearInterval(interval)
+  }, [status, notified, mounted])
 
-  if (loading) return (
+  const filteredSizeGroups = useMemo(() => {
+    if (!data?.size_groups) return []
+    const query = searchQuery.toLowerCase()
+    return data.size_groups.filter(group => {
+      return (group?.files || []).some(file => {
+        const name = (file?.name || '').toLowerCase()
+        const matchesSearch = name.includes(query)
+        const matchesType = fileType === 'all' || name.endsWith(`.${fileType.toLowerCase()}`)
+        return matchesSearch && matchesType
+      })
+    }) || []
+  }, [data?.size_groups, searchQuery, fileType])
+
+  const filteredSimilarPairs = useMemo(() => {
+    if (!data?.similar_pairs) return []
+    const query = searchQuery.toLowerCase()
+    const type = fileType.toLowerCase()
+
+    // Performance optimization: limit scanning to first 10k pairs if no filter is active
+    // This prevents browser UI lag with massive datasets (>25k pairs)
+    const list = searchQuery === '' && fileType === 'all'
+      ? data.similar_pairs.slice(0, 10000)
+      : data.similar_pairs
+
+    return list.filter(pair => {
+      const name1 = (pair?.file1?.name || '').toLowerCase()
+      const name2 = (pair?.file2?.name || '').toLowerCase()
+      const matchesSearch = name1.includes(query) || name2.includes(query)
+      const matchesType = fileType === 'all' || name1.endsWith(`.${type}`) || name2.endsWith(`.${type}`)
+      return matchesSearch && matchesType
+    }) || []
+  }, [data?.similar_pairs, searchQuery, fileType])
+
+  const currentItems = useMemo(() =>
+    viewMode === 'size' ? (filteredSizeGroups || []) : (filteredSimilarPairs || [])
+    , [viewMode, filteredSizeGroups, filteredSimilarPairs])
+
+  const paginatedItems = useMemo(() =>
+    currentItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+    , [currentItems, currentPage, itemsPerPage])
+
+  const totalPages = useMemo(() =>
+    Math.ceil(currentItems.length / itemsPerPage)
+    , [currentItems.length, itemsPerPage])
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // Reset to page 1 when filters or view mode change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery, fileType, viewMode, itemsPerPage])
+
+  if (!mounted || loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white">
       <motion.div
         animate={{ rotate: 360 }}
@@ -255,26 +339,8 @@ export default function Dashboard() {
     { label: 'Total Files', value: data?.total_files || 0, icon: Box, color: 'text-blue-400' },
     { label: 'Size Groups', value: data?.size_groups?.length || 0, icon: Layers, color: 'text-purple-400' },
     { label: 'Similar Names', value: data?.similar_pairs?.length || 0, icon: FileText, color: 'text-cyan-400' },
-    { label: 'Scan Time', value: `${data?.analysis_duration_seconds?.toFixed(2)}s`, icon: Clock, color: 'text-green-400' },
+    { label: 'Scan Time', value: `${data?.analysis_duration_seconds?.toFixed(2) || 0}s`, icon: Clock, color: 'text-green-400' },
   ]
-
-  const filteredSizeGroups = data?.size_groups?.filter(group => {
-    return group.files.some(file => {
-      const matchesSearch = file.name.toLowerCase().includes(searchQuery.toLowerCase())
-      const matchesType = fileType === 'all' || file.name.toLowerCase().endsWith(`.${fileType.toLowerCase()}`)
-      return matchesSearch && matchesType
-    })
-  }) || []
-
-  const filteredSimilarPairs = data?.similar_pairs?.filter(pair => {
-    const matchesSearch =
-      pair.file1.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      pair.file2.name.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesType = fileType === 'all' ||
-      pair.file1.name.toLowerCase().endsWith(`.${fileType.toLowerCase()}`) ||
-      pair.file2.name.toLowerCase().endsWith(`.${fileType.toLowerCase()}`)
-    return matchesSearch && matchesType
-  }) || []
 
   const fileTypes = ['all', 'zip', 'rar', '7z', 'stl']
 
@@ -320,6 +386,41 @@ export default function Dashboard() {
             className="w-full bg-white/5 border border-white/5 rounded-2xl py-4 pl-12 pr-4 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
           />
         </div>
+        <div className="flex gap-2 bg-white/5 p-1 rounded-2xl border border-white/5">
+          <button
+            onClick={() => setViewMode('size')}
+            className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${viewMode === 'size'
+              ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
+              : 'text-gray-500 hover:text-gray-300'
+              }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Size Matches
+          </button>
+          <button
+            onClick={() => setViewMode('similar')}
+            className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${viewMode === 'similar'
+              ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20'
+              : 'text-gray-500 hover:text-gray-300'
+              }`}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Similar Names
+          </button>
+        </div>
+        <div className="relative">
+          <select
+            value={itemsPerPage}
+            onChange={(e) => setItemsPerPage(Number(e.target.value))}
+            className="appearance-none bg-white/5 border border-white/5 rounded-2xl py-4 pl-6 pr-12 text-[10px] font-black uppercase tracking-widest text-gray-400 focus:outline-none focus:border-blue-500/50 transition-all cursor-pointer"
+          >
+            <option value={10}>10 Per Page</option>
+            <option value={20}>20 Per Page</option>
+            <option value={50}>50 Per Page</option>
+            <option value={100}>100 Per Page</option>
+          </select>
+          <Filter className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600 pointer-events-none" />
+        </div>
         <div className="flex gap-2">
           {fileTypes.map(type => (
             <button
@@ -344,7 +445,14 @@ export default function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1 }}
-            className="glass-card p-6 rounded-3xl relative overflow-hidden group hover:scale-[1.02] transition-all cursor-default"
+            className={`glass-card p-6 rounded-3xl relative overflow-hidden group hover:scale-[1.02] transition-all cursor-pointer ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar')
+              ? 'border-blue-500/50 shadow-lg shadow-blue-500/10'
+              : 'border-white/5'
+              }`}
+            onClick={() => {
+              if (stat.label === 'Size Groups') setViewMode('size')
+              if (stat.label === 'Similar Names') setViewMode('similar')
+            }}
           >
             <div className={`absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-blue-500/0 via-blue-500/50 to-blue-500/0 group-hover:via-blue-400 transition-all`} />
             <div className="flex justify-between items-center mb-4">
@@ -363,77 +471,137 @@ export default function Dashboard() {
         {/* Left Column: Listings */}
         <div className="lg:col-span-8 space-y-8">
 
-          {/* Section: Identical Sizes */}
+          {/* Section: Results */}
           <section>
             <div className="flex items-center gap-4 mb-6">
-              <div className="p-2 bg-blue-500/20 rounded-xl">
-                <Layers className="w-5 h-5 text-blue-400" />
+              <div className={`p-2 rounded-xl ${viewMode === 'size' ? 'bg-blue-500/20' : 'bg-cyan-500/20'}`}>
+                {viewMode === 'size' ? (
+                  <Layers className="w-5 h-5 text-blue-400" />
+                ) : (
+                  <FileText className="w-5 h-5 text-cyan-400" />
+                )}
               </div>
-              <h2 className="text-xl font-bold text-white uppercase tracking-widest">Identical Size Groups</h2>
+              <h2 className="text-xl font-bold text-white uppercase tracking-widest">
+                {viewMode === 'size' ? 'Identical Size Groups' : 'Similarity Hits'}
+              </h2>
               <div className="flex-1 h-px bg-white/5" />
+              {currentItems.length > 0 && (
+                <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest bg-white/5 px-3 py-1 rounded-full">
+                  Page {currentPage} of {totalPages} ({currentItems.length} Total)
+                </div>
+              )}
             </div>
 
             <div className="space-y-4">
-              {filteredSizeGroups.map((group, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="glass-card p-4 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-all"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <span className="text-[10px] font-black text-blue-500/60 uppercase tracking-widest">Group {i + 1}</span>
-                    <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
-                      Weight: {(group.size / (1024 * 1024)).toFixed(1)} MB
-                    </span>
-                  </div>
-                  <div className="space-y-2">
-                    {group.files.map((file, fi) => (
-                      <FileItem key={fi} file={file} />
-                    ))}
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          </section>
-
-          {/* Section: Similar Names */}
-          <section>
-            <div className="flex items-center gap-4 mb-6">
-              <div className="p-2 bg-cyan-500/20 rounded-xl">
-                <FileText className="w-5 h-5 text-cyan-400" />
-              </div>
-              <h2 className="text-xl font-bold text-white uppercase tracking-widest">Similarity Hits</h2>
-              <div className="flex-1 h-px bg-white/5" />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredSimilarPairs.map((pair, i) => (
-                <div key={i} className="glass-card p-5 rounded-2xl relative overflow-hidden">
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${pair.similarity > 90 ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.5)]' : 'bg-yellow-500'}`} />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                          Match: {pair.similarity.toFixed(1)}%
-                        </span>
-                      </div>
-                      <AlertTriangle className={`w-4 h-4 ${pair.similarity > 90 ? 'text-orange-500' : 'text-yellow-500'} opacity-60`} />
+              {viewMode === 'size' ? (
+                (paginatedItems as SizeGroup[]).map((group, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="glass-card p-4 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-all"
+                  >
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-[10px] font-black text-blue-500/60 uppercase tracking-widest">Group {((currentPage - 1) * itemsPerPage) + i + 1}</span>
+                      <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
+                        Weight: {(group.size / (1024 * 1024)).toFixed(1)} MB
+                      </span>
                     </div>
+                    <div className="space-y-2">
+                      {group.files.map((file, fi) => (
+                        <FileItem key={fi} file={file} />
+                      ))}
+                    </div>
+                  </motion.div>
+                ))
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {(paginatedItems as SimilarPair[]).map((pair, i) => (
+                    <div key={i} className="glass-card p-5 rounded-2xl relative overflow-hidden h-fit">
+                      <div className="flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full ${pair.similarity > 90 ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.5)]' : 'bg-yellow-500'}`} />
+                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                              Match: {pair.similarity.toFixed(1)}%
+                            </span>
+                          </div>
+                          <AlertTriangle className={`w-4 h-4 ${pair.similarity > 90 ? 'text-orange-500' : 'text-yellow-500'} opacity-60`} />
+                        </div>
 
-                    <div className="space-y-3 mt-2">
-                      <FileItem file={pair.file1} />
-                      <div className="flex justify-center -my-2 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center scale-90 shadow-lg shadow-blue-500/20">
-                          <Search className="w-3 h-3 text-white" />
+                        <div className="space-y-3 mt-2">
+                          <FileItem file={pair.file1} />
+                          <div className="flex justify-center -my-2 relative z-10">
+                            <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center scale-90 shadow-lg shadow-blue-500/20">
+                              <Search className="w-3 h-3 text-white" />
+                            </div>
+                          </div>
+                          <FileItem file={pair.file2} />
                         </div>
                       </div>
-                      <FileItem file={pair.file2} />
                     </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
+              )}
+
+              {currentItems.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20 bg-white/5 rounded-3xl border border-dashed border-white/10">
+                  <Box className="w-12 h-12 text-gray-700 mb-4" />
+                  <p className="text-gray-500 font-bold uppercase tracking-widest">No duplicates found</p>
+                </div>
+              )}
             </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex justify-center items-center gap-2 mt-12">
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="p-3 bg-white/5 rounded-xl text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >
+                  <Zap className="w-4 h-4 rotate-180" />
+                </button>
+
+                <div className="flex gap-2">
+                  {[...Array(totalPages)].map((_, i) => {
+                    const page = i + 1
+                    if (
+                      page === 1 ||
+                      page === totalPages ||
+                      (page >= currentPage - 1 && page <= currentPage + 1)
+                    ) {
+                      return (
+                        <button
+                          key={page}
+                          onClick={() => handlePageChange(page)}
+                          className={`w-10 h-10 rounded-xl text-[10px] font-black transition-all ${currentPage === page
+                            ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
+                            : 'bg-white/5 text-gray-500 hover:text-gray-300'
+                            }`}
+                        >
+                          {page}
+                        </button>
+                      )
+                    } else if (
+                      page === currentPage - 2 ||
+                      page === currentPage + 2
+                    ) {
+                      return <span key={page} className="w-10 h-10 flex items-center justify-center text-gray-700">...</span>
+                    }
+                    return null
+                  })}
+                </div>
+
+                <button
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="p-3 bg-white/5 rounded-xl text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >
+                  <Zap className="w-4 h-4" />
+                </button>
+              </div>
+            )}
           </section>
         </div>
 

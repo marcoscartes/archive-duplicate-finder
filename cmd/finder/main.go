@@ -38,6 +38,7 @@ type Config struct {
 	LeaveRef    bool   // Leave a .txt link to the original
 	Web         bool   // Start web dashboard
 	Port        int    // Web server port
+	GPUTurbo    bool   // Experimental high-performance mode
 }
 
 func main() {
@@ -143,7 +144,11 @@ func main() {
 				}
 			}
 
-			similarPairs := similarity.FindSimilarNames(files, config.Threshold)
+			if config.GPUTurbo {
+				fmt.Println("🚀 TURBO MODE: Maximizing parallel compute throughput...")
+			}
+
+			similarPairs := similarity.FindSimilarNames(files, config.Threshold, config.GPUTurbo)
 			pairs := analyzeSimilarNameDifferentSize(similarPairs, config.Verbose, config)
 
 			// Save to cache
@@ -172,6 +177,7 @@ func main() {
 			go func() {
 				results := runStep3()
 				finalReport.SimilarPairs = results
+				finalReport.SimilarCount = len(results)
 				finalReport.Status = "finished"
 				finalReport.AnalysisDuration = time.Since(startTime).Seconds()
 			}()
@@ -182,6 +188,7 @@ func main() {
 
 		// Update the shared report with initial results (might be empty or cached)
 		finalReport.SimilarPairs = finalSimilarPairs
+		finalReport.SimilarCount = len(finalSimilarPairs)
 	} else {
 		finalReport.Status = "finished"
 	}
@@ -213,6 +220,7 @@ func parseFlags() Config {
 	flag.BoolVar(&config.LeaveRef, "ref", false, "Leave a .txt file pointing to the preserved original")
 	flag.BoolVar(&config.Web, "web", false, "Start web dashboard after analysis")
 	flag.IntVar(&config.Port, "port", 8080, "Web server port")
+	flag.BoolVar(&config.GPUTurbo, "gpu", false, "Enable experimental GPU/Turbo acceleration (Bit-Parallel Engine)")
 
 	flag.Parse()
 

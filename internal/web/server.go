@@ -48,6 +48,12 @@ func (s *Server) Start() error {
 	api := app.Group("/api")
 
 	api.Get("/report", func(c *fiber.Ctx) error {
+		if c.Query("exclude_similar") == "true" {
+			// Create a copy without similar pairs
+			reportCopy := *s.report
+			reportCopy.SimilarPairs = nil
+			return c.Status(200).JSON(reportCopy)
+		}
 		return c.Status(200).JSON(s.report)
 	})
 

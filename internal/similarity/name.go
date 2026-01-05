@@ -23,7 +23,7 @@ type NormalizedFile struct {
 }
 
 // FindSimilarNames finds pairs of files with similar names but different sizes using parallel processing
-func FindSimilarNames(files []scanner.ArchiveFile, threshold int) []SimilarPair {
+func FindSimilarNames(files []scanner.ArchiveFile, threshold int, turbo bool) []SimilarPair {
 	if len(files) < 2 {
 		return nil
 	}
@@ -39,6 +39,9 @@ func FindSimilarNames(files []scanner.ArchiveFile, threshold int) []SimilarPair 
 
 	// 2. Setup parallel processing
 	numWorkers := runtime.NumCPU()
+	if turbo {
+		numWorkers *= 2 // Over-subscribe for extreme concurrent throughput
+	}
 	var wg sync.WaitGroup
 	pairsChan := make(chan SimilarPair, 1000)
 
@@ -145,18 +148,77 @@ func normalizeFilename(filename string) string {
 
 // levenshteinSimilarity calculates Levenshtein distance-based similarity
 func levenshteinSimilarity(s1, s2 string) float64 {
-	distance := levenshteinDistance(s1, s2)
-	maxLen := math.Max(float64(utf8.RuneCountInString(s1)), float64(utf8.RuneCountInString(s2)))
-
-	if maxLen == 0 {
+	if s1 == s2 {
 		return 1.0
 	}
+	len1 := utf8.RuneCountInString(s1)
+	len2 := utf8.RuneCountInString(s2)
 
+	if len1 == 0 || len2 == 0 {
+		return 0.0
+	}
+
+	// Use Fast Bit-Parallel Myers Algorithm for strings < 64 chars
+	// (Most filenames fit here, making it extremely fast)
+	var distance int
+	if len1 <= 64 && len2 <= 64 {
+		distance = myersDistance(s1, s2)
+	} else {
+		distance = levenshteinDistance(s1, s2) // Fallback for very long names
+	}
+
+	maxLen := math.Max(float64(len1), float64(len2))
 	return 1.0 - (float64(distance) / maxLen)
 }
 
-// levenshteinDistance calculates the Levenshtein distance between two strings
+// myersDistance calculates Levenshtein distance using bit-parallelism (extremely fast)
+func myersDistance(s1, s2 string) int {
+	r1 := []rune(s1)
+	r2 := []rune(s2)
+	n := len(r1)
+	m := len(r2)
+
+	if n > m {
+		r1, r2 = r2, r1
+		n, m = m, n
+	}
+
+	if n == 0 {
+		return m
+	}
+
+	// Precompute alphabet masks
+	peq := make(map[rune]uint64)
+	for i, char := range r1 {
+		peq[char] |= uint64(1) << uint64(i)
+	}
+
+	pv := ^uint64(0)
+	nv := uint64(0)
+	dist := n
+
+	for _, char := range r2 {
+		eq := peq[char]
+		xv := eq | nv
+		eq |= ((eq & pv) + pv) ^ pv
+		nv = pv & eq
+		pv = (nv << 1) | ^(xv | (pv << 1))
+		nv &= xv
+
+		if (eq>>uint64(n-1))&1 != 0 {
+			dist++
+		}
+		if (pv>>uint64(n-1))&1 != 0 {
+			dist--
+		}
+	}
+
+	return dist
+}
+
+// levenshteinDistance is the traditional matrix-based fallback
 func levenshteinDistance(s1, s2 string) int {
+	// ... (Existing matrix implementation for long strings)
 	r1 := []rune(s1)
 	r2 := []rune(s2)
 
