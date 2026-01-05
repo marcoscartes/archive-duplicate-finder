@@ -99,6 +99,13 @@ function PreviewImage({ path }: { path: string }) {
 function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void }) {
   const [isHovered, setIsHovered] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+
+  // Reset states when the file changes, preventing "stuck" buttons when React reuses the component
+  useEffect(() => {
+    setIsDeleting(false)
+    setShowConfirm(false)
+  }, [file.path])
 
   const handleOpen = (e: React.MouseEvent, mode: 'reveal' | 'launch') => {
     e.stopPropagation()
@@ -107,10 +114,9 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
       .catch(err => console.error(`Failed to ${mode} file:`, err))
   }
 
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!confirm(`Are you sure you want to move this file to trash?\n${file.name}`)) return
-
+  const handleDelete = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
+    setShowConfirm(false)
     setIsDeleting(true)
     const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
     try {
@@ -153,7 +159,7 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
           <Folder className="w-4 h-4" />
         </button>
         <button
-          onClick={handleDelete}
+          onClick={(e) => { e.stopPropagation(); setShowConfirm(true); }}
           disabled={isDeleting}
           className={`p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-red-400 transition-all ${isDeleting ? 'opacity-50 cursor-wait' : ''}`}
           title="Delete/Trash File"
@@ -165,6 +171,37 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
           )}
         </button>
       </div>
+
+      <AnimatePresence>
+        {showConfirm && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            className="absolute inset-0 bg-gray-900/90 rounded-xl z-50 flex items-center justify-between px-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-white">Move to trash?</span>
+              <span className="text-[10px] text-gray-400 truncate max-w-[200px]">{file.name}</span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="px-3 py-1 bg-white/10 hover:bg-white/20 rounded-lg text-[10px] font-bold text-white transition-all uppercase tracking-wider"
+              >
+                No
+              </button>
+              <button
+                onClick={() => handleDelete()}
+                className="px-3 py-1 bg-red-500 hover:bg-red-600 rounded-lg text-[10px] font-bold text-white transition-all uppercase tracking-wider shadow-lg shadow-red-500/20"
+              >
+                Yes
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isHovered && (
@@ -517,8 +554,8 @@ export default function Dashboard() {
                       </span>
                     </div>
                     <div className="space-y-2">
-                      {group.files.map((file, fi) => (
-                        <FileItem key={fi} file={file} onRefresh={fetchData} />
+                      {group.files.map((file) => (
+                        <FileItem key={file.path} file={file} onRefresh={fetchData} />
                       ))}
                     </div>
                   </motion.div>
@@ -539,13 +576,13 @@ export default function Dashboard() {
                         </div>
 
                         <div className="space-y-3 mt-2">
-                          <FileItem file={pair.file1} onRefresh={fetchData} />
+                          <FileItem key={pair.file1.path} file={pair.file1} onRefresh={fetchData} />
                           <div className="flex justify-center -my-2 relative z-10">
                             <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center scale-90 shadow-lg shadow-blue-500/20">
                               <Search className="w-3 h-3 text-white" />
                             </div>
                           </div>
-                          <FileItem file={pair.file2} onRefresh={fetchData} />
+                          <FileItem key={pair.file2.path} file={pair.file2} onRefresh={fetchData} />
                         </div>
                       </div>
                     </div>
