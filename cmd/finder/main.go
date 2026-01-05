@@ -39,6 +39,7 @@ type Config struct {
 	Web         bool   // Start web dashboard
 	Port        int    // Web server port
 	GPUTurbo    bool   // Experimental high-performance mode
+	Debug       bool   // Enable detailed debug logging
 }
 
 func main() {
@@ -58,6 +59,9 @@ func main() {
 	log.Printf("📂 Scanning directory: %s", config.Directory)
 	log.Printf("🎯 Similarity threshold: %d%%", config.Threshold)
 	log.Printf("🔧 Mode: %s", config.Mode)
+	if config.Debug {
+		log.Printf("🐛 DEBUG MODE: Enabled (Detailed Tracing)")
+	}
 	if config.DeleteMode != "" {
 		log.Printf("🗑️  Cleanup Mode: %s (Auto: %v)", config.DeleteMode, config.AutoDelete)
 	}
@@ -120,6 +124,7 @@ func main() {
 	// Start web dashboard early if requested
 	if config.Web {
 		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef)
+		srv.SetDebug(config.Debug)
 		go func() {
 			if err := srv.Start(); err != nil {
 				log.Printf("❌ Web server error: %v", err)
@@ -148,10 +153,10 @@ func main() {
 			}
 
 			if config.GPUTurbo {
-				fmt.Println("🚀 TURBO MODE: Maximizing parallel compute throughput...")
+				log.Printf("🚀 TURBO MODE: Maximizing parallel compute throughput...")
 			}
 
-			similarPairs := similarity.FindSimilarNames(files, config.Threshold, config.GPUTurbo)
+			similarPairs := similarity.FindSimilarNames(files, config.Threshold, config.GPUTurbo, config.Debug)
 			pairs := analyzeSimilarNameDifferentSize(similarPairs, config.Verbose, config)
 
 			// Save to cache
@@ -224,6 +229,7 @@ func parseFlags() Config {
 	flag.BoolVar(&config.Web, "web", false, "Start web dashboard after analysis")
 	flag.IntVar(&config.Port, "port", 8080, "Web server port")
 	flag.BoolVar(&config.GPUTurbo, "gpu", false, "Enable experimental GPU/Turbo acceleration (Bit-Parallel Engine)")
+	flag.BoolVar(&config.Debug, "debug", false, "Enable detailed debug logging for troubleshooting")
 
 	flag.Parse()
 
@@ -278,7 +284,7 @@ func analyzeSameSizeDifferentName(sizeGroups map[int64][]scanner.ArchiveFile, th
 				file2 := group[j]
 
 				// Calculate name similarity
-				sim := similarity.CalculateNameSimilarity(file1.Name, file2.Name)
+				sim := similarity.CalculateNameSimilarity(file1.Name, file2.Name, config.Debug)
 
 				// Skip if they are different parts of the same multi-volume set
 				is1, base1, p1 := file1.IsMultiVolumePart()

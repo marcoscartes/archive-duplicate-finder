@@ -2,6 +2,7 @@ package similarity
 
 import (
 	"archive-duplicate-finder/internal/scanner"
+	"log"
 	"math"
 	"runtime"
 	"strings"
@@ -23,7 +24,7 @@ type NormalizedFile struct {
 }
 
 // FindSimilarNames finds pairs of files with similar names but different sizes using parallel processing
-func FindSimilarNames(files []scanner.ArchiveFile, threshold int, turbo bool) []SimilarPair {
+func FindSimilarNames(files []scanner.ArchiveFile, threshold int, turbo bool, debug bool) []SimilarPair {
 	if len(files) < 2 {
 		return nil
 	}
@@ -81,7 +82,7 @@ func FindSimilarNames(files []scanner.ArchiveFile, threshold int, turbo bool) []
 					}
 
 					// Perform comparison
-					similarity := CalculateNormalizedSimilarity(f1.NormalizedName, f2.NormalizedName)
+					similarity := CalculateNormalizedSimilarity(f1.NormalizedName, f2.NormalizedName, debug)
 
 					if similarity >= float64(threshold) {
 						pairsChan <- SimilarPair{
@@ -114,7 +115,7 @@ func FindSimilarNames(files []scanner.ArchiveFile, threshold int, turbo bool) []
 }
 
 // CalculateNormalizedSimilarity calculates similarity between two already normalized strings
-func CalculateNormalizedSimilarity(norm1, norm2 string) float64 {
+func CalculateNormalizedSimilarity(norm1, norm2 string, debug bool) float64 {
 	if norm1 == norm2 {
 		return 100.0
 	}
@@ -127,12 +128,16 @@ func CalculateNormalizedSimilarity(norm1, norm2 string) float64 {
 	// Weighted average (Levenshtein is most reliable for filenames)
 	similarity := (lev*0.5 + jaro*0.3 + ngram*0.2) * 100
 
+	if debug && (similarity > 50) {
+		log.Printf("DEBUG: %s ↔ %s | Lev: %.2f Jaro: %.2f NGram: %.2f | SUM: %.2f", norm1, norm2, lev, jaro, ngram, similarity)
+	}
+
 	return math.Round(similarity*10) / 10 // Round to 1 decimal
 }
 
 // CalculateNameSimilarity calculates similarity between two raw filenames
-func CalculateNameSimilarity(name1, name2 string) float64 {
-	return CalculateNormalizedSimilarity(normalizeFilename(name1), normalizeFilename(name2))
+func CalculateNameSimilarity(name1, name2 string, debug bool) float64 {
+	return CalculateNormalizedSimilarity(normalizeFilename(name1), normalizeFilename(name2), debug)
 }
 
 // normalizeFilename removes extension and converts to lowercase

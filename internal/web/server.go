@@ -15,6 +15,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
 )
 
 // Server represents the web dashboard server
@@ -23,6 +24,7 @@ type Server struct {
 	report    *reporter.Report
 	trashPath string
 	leaveRef  bool
+	debug     bool
 	mu        sync.Mutex
 }
 
@@ -36,6 +38,11 @@ func NewServer(port int, report *reporter.Report, trashPath string, leaveRef boo
 	}
 }
 
+// SetDebug enables or disables debug mode
+func (s *Server) SetDebug(enabled bool) {
+	s.debug = enabled
+}
+
 // Start starts the web server
 func (s *Server) Start() error {
 	app := fiber.New(fiber.Config{
@@ -44,6 +51,13 @@ func (s *Server) Start() error {
 
 	// Enable CORS
 	app.Use(cors.New())
+
+	// Add detailed logging in debug mode
+	if s.debug {
+		app.Use(logger.New(logger.Config{
+			Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
+		}))
+	}
 
 	// API Routes
 	api := app.Group("/api")
