@@ -19,6 +19,7 @@ import (
 	"archive-duplicate-finder/internal/scanner"
 	"archive-duplicate-finder/internal/similarity"
 	"archive-duplicate-finder/internal/stl"
+	"archive-duplicate-finder/internal/web"
 )
 
 type Config struct {
@@ -32,6 +33,10 @@ type Config struct {
 	DeleteMode  string // "oldest" or "contents"
 	AutoDelete  bool
 	Interactive bool
+	TrashPath   string // Folder to move duplicates to
+	LeaveRef    bool   // Leave a .txt link to the original
+	Web         bool   // Start web dashboard
+	Port        int    // Web server port
 }
 
 func main() {
@@ -92,7 +97,22 @@ func main() {
 		}
 	}
 
+	// Build initial report for web (will be updated)
+	finalReport := &baseReport
+	finalReport.SizeGroups = finalSizeGroups
+
+	// Start web dashboard early if requested
+	if config.Web {
+		srv := web.NewServer(config.Port, finalReport)
+		go func() {
+			if err := srv.Start(); err != nil {
+				log.Printf("❌ Web server error: %v", err)
+			}
+		}()
+	}
+
 	// Step 3: Similar Names
+	var finalSimilarPairs []reporter.SimilarPair
 	if config.Mode == "all" || config.Mode == "name" {
 		fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		if config.Interactive {
@@ -104,38 +124,46 @@ func main() {
 
 		runStep3 := func() []reporter.SimilarPair {
 			similarPairs := similarity.FindSimilarNames(files, config.Threshold)
-			finalSimilarPairs := analyzeSimilarNameDifferentSize(similarPairs, config.Verbose, config)
+			pairs := analyzeSimilarNameDifferentSize(similarPairs, config.Verbose, config)
 
 			if config.PDFFile != "" {
 				report3 := baseReport
-				report3.SimilarPairs = finalSimilarPairs
+				report3.SimilarPairs = pairs
 				report3.SizeGroups = finalSizeGroups // Include size groups in the final one too
 				pdfName := "Final_Full_" + config.PDFFile
 				reporter.ExportPDF(report3, pdfName)
 				fmt.Printf("\n✅ Step 3 analysis FINISHED. Final PDF ready: %s\n", pdfName)
 			}
-			return finalSimilarPairs
+			return pairs
 		}
 
 		if config.Interactive {
 			// Run sequentially for interactivity to handle stdin correctly
-			runStep3()
+			finalSimilarPairs = runStep3()
 		} else {
 			// Run in background
-			done := make(chan bool)
+			done := make(chan []reporter.SimilarPair)
 			go func() {
-				runStep3()
-				done <- true
+				done <- runStep3()
 			}()
 
-			fmt.Println("ℹ️  You can already check the Step 2 PDF while Step 3 works.")
-			fmt.Println("   Press Ctrl+C to stop if you don't need the similarity analysis.")
-			<-done
+			fmt.Println("ℹ️  You can already check the dashboard while Step 3 works.")
+			fmt.Println("   Press Ctrl+C to stop the process if finished.")
+			finalSimilarPairs = <-done
 		}
+
+		// Update the shared report with results
+		finalReport.SimilarPairs = finalSimilarPairs
 	}
 
 	elapsedTotal := time.Since(startTime)
 	fmt.Printf("\n📈 Total processing time: %.2fs\n", elapsedTotal.Seconds())
+
+	// If web server is running, block indefinitely to keep it alive
+	if config.Web {
+		fmt.Println("\n📡 Dashboard is ACTIVE. Press Ctrl+C to shutdown.")
+		select {}
+	}
 }
 
 func parseFlags() Config {
@@ -151,6 +179,10 @@ func parseFlags() Config {
 	flag.StringVar(&config.DeleteMode, "delete", "", "Cleanup mode: 'oldest' or 'contents'")
 	flag.BoolVar(&config.AutoDelete, "yes", false, "Auto-confirm deletion without asking")
 	flag.BoolVar(&config.Interactive, "interactive", false, "Choose which file to delete manually")
+	flag.StringVar(&config.TrashPath, "trash", "", "Folder to move duplicates to (instead of deleting)")
+	flag.BoolVar(&config.LeaveRef, "ref", false, "Leave a .txt file pointing to the preserved original")
+	flag.BoolVar(&config.Web, "web", false, "Start web dashboard after analysis")
+	flag.IntVar(&config.Port, "port", 8080, "Web server port")
 
 	flag.Parse()
 
@@ -385,9 +417,9 @@ func handleCleanup(f1, f2 scanner.ArchiveFile, config Config) {
 		fmt.Scanln(&choice)
 		switch strings.ToLower(choice) {
 		case "1":
-			deleteFile(f1.Path)
+			performFileAction(f1, f2, config)
 		case "2":
-			deleteFile(f2.Path)
+			performFileAction(f2, f1, config)
 		case "k":
 			fmt.Println("     ✅ Keeping both files.")
 		default:
@@ -438,14 +470,56 @@ func handleCleanup(f1, f2 scanner.ArchiveFile, config Config) {
 
 	fmt.Printf("  🗑️  Candidate for deletion: %s (%s)\n", toDelete.Name, reason)
 
+	// Identify preserved file
+	preserved := f1
+	if toDelete.Path == f1.Path {
+		preserved = f2
+	}
+
 	if config.AutoDelete {
-		deleteFile(toDelete.Path)
+		performFileAction(toDelete, preserved, config)
 	} else {
-		fmt.Printf("     Delete this file? (y/N): ")
+		fmt.Printf("     Delete/Move this file? (y/N): ")
 		var response string
 		fmt.Scanln(&response)
 		if strings.ToLower(response) == "y" {
-			deleteFile(toDelete.Path)
+			performFileAction(toDelete, preserved, config)
+		}
+	}
+}
+
+func performFileAction(target, preserved scanner.ArchiveFile, config Config) {
+	if config.TrashPath != "" {
+		// Ensure trash directory exists
+		if _, err := os.Stat(config.TrashPath); os.IsNotExist(err) {
+			os.MkdirAll(config.TrashPath, 0755)
+		}
+
+		destPath := filepath.Join(config.TrashPath, target.Name)
+		err := os.Rename(target.Path, destPath)
+		if err != nil {
+			fmt.Printf("     ❌ Error moving to trash: %v (Attempting delete instead)\n", err)
+			deleteFile(target.Path)
+		} else {
+			fmt.Printf("     ✅ Moved to trash: %s\n", destPath)
+		}
+	} else {
+		deleteFile(target.Path)
+	}
+
+	// Create reference link if requested
+	if config.LeaveRef {
+		refPath := target.Path + ".duplicate.txt"
+		content := fmt.Sprintf("Archive Duplicate Finder\n-----------------------\nAction: Removed as duplicate\nDate: %s\nOriginal kept: %s\nOriginal size: %s\n",
+			time.Now().Format("2006-01-02 15:04:05"),
+			preserved.Path,
+			formatBytes(preserved.Size))
+
+		err := os.WriteFile(refPath, []byte(content), 0644)
+		if err != nil {
+			fmt.Printf("     ⚠️  Could not create reference file: %v\n", err)
+		} else {
+			fmt.Printf("     📝 Reference note created: %s\n", filepath.Base(refPath))
 		}
 	}
 }

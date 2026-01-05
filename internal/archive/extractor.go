@@ -29,6 +29,99 @@ func ExtractArchive(archivePath string) (map[string][]byte, error) {
 	}
 }
 
+// FindFirstImageInArchive returns the contents of the first image (jpg, jpeg, png) found in the archive
+func FindFirstImageInArchive(archivePath string) ([]byte, string, error) {
+	ext := strings.ToLower(filepath.Ext(archivePath))
+
+	switch ext {
+	case ".zip":
+		return findFirstImageZIP(archivePath)
+	case ".rar":
+		return findFirstImageRAR(archivePath)
+	case ".7z":
+		return findFirstImage7Z(archivePath)
+	default:
+		return nil, "", fmt.Errorf("unsupported archive format: %s", ext)
+	}
+}
+
+func isImageFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
+}
+
+func findFirstImageZIP(archivePath string) ([]byte, string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && isImageFile(file.Name) {
+			rc, err := file.Open()
+			if err != nil {
+				continue
+			}
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil {
+				return data, file.Name, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no image found")
+}
+
+func findFirstImageRAR(archivePath string) ([]byte, string, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+
+		if !header.IsDir && isImageFile(header.Name) {
+			data, err := io.ReadAll(reader)
+			if err == nil {
+				return data, header.Name, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no image found")
+}
+
+func findFirstImage7Z(archivePath string) ([]byte, string, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && isImageFile(file.Name) {
+			rc, err := file.Open()
+			if err != nil {
+				continue
+			}
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil {
+				return data, file.Name, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no image found")
+}
+
 // extractZIP extracts files from a ZIP archive
 func extractZIP(archivePath string) (map[string][]byte, error) {
 	contents := make(map[string][]byte)

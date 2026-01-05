@@ -27,7 +27,10 @@ go.work
 .DS_Store
 Thumbs.db
 
-# Reports
+# Web UI
+ui/node_modules/
+ui/.next/
+ui/.env*
 *.pdf
 *.json
 report/

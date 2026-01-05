@@ -16,12 +16,17 @@
 ## 🚀 Features
 
 - **🔍 Smart Scanning:** Detects ZIP, RAR, and 7Z archives recursively.
+- **🌐 Interactive Web Dashboard:** Premium UI built with Next.js and Fiber for visual results management.
+- **🖼️ Archive Intelligence Preview:** Hover over archives to see the first image found inside without extraction.
 - **⚖️ Size Matching:** Instantly identifies files with identical byte sizes but different names.
 - **🧬 Similarity Analysis:** Uses advanced algorithms (Levenshtein, Jaro-Winkler, N-Grams) to find similar filenames.
-- **🔬 3D Content Awareness:** Deep-dives into archives to compare STL file geometry (vertices, triangles, bounding boxes).
+- **🔬 3D Content Awareness:** Deep-dives into archives to compare STL file geometry.
+- **📂 Explorer Integration:** Open files directly with associated apps or reveal them in the system folder from the dashboard.
 - **🛡️ Multi-volume Protection:** Automatically protects split archives (part1, part2) from deletion.
+- **🗑️ Trash Mode:** Move duplicates to a safe folder instead of permanent deletion.
+- **📝 Reference Tracking:** Leave a `.txt` file pointing to the location of the preserved original.
 - **🕹️ Interactive Mode:** Take control and decide manually which duplicates to keep or remove.
-- **📄 Pro Reporting:** Generates instant PDF reports (and JSON) even while background analysis is running.
+- **📄 Pro Reporting:** Generates instant PDF reports even while background analysis is running.
 
 ---
 
@@ -29,7 +34,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/youruser/archive-duplicate-finder.git
+git clone https://github.com/marcoscartes/archive-duplicate-finder.git
 
 # Navigate to the project
 cd archive-duplicate-finder
@@ -47,9 +52,21 @@ go build -o archive-finder ./cmd/finder
 ./archive-finder -dir "/path/to/archives"
 ```
 
+### Safe Cleanup (Recommended)
+```bash
+# Move duplicates to a trash folder and leave a reference note
+./archive-finder -dir "/path/to/archives" -delete oldest -trash "./trash" -ref -yes
+```
+
 ### Interactive Cleanup
 ```bash
 ./archive-finder -dir "/path/to/archives" -interactive
+```
+
+### Web Dashboard (New!)
+```bash
+# Launch the scanner with a premium web interface
+./archive-finder -dir "/path/to/archives" -web -port 8081
 ```
 
 ### PDF Reporting
@@ -79,6 +96,9 @@ go build -o archive-finder ./cmd/finder
 
 This software was built and refined with the assistance of **Antigravity**, an AI agent specialized in advanced coding tasks. Antigravity helped implement:
 - Parallel string similarity processing.
+- Glassmorphic Web Dashboard with Next.js/Three.js.
+- Real-time archive preview (On-Hover extraction).
+- Multi-platform Explorer/Reveal integration.
 - PDF reporting modules.
 - Multi-volume archive detection logic.
 - Interactive CLI resolution menus.
