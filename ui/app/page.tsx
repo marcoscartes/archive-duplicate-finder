@@ -96,8 +96,9 @@ function PreviewImage({ path }: { path: string }) {
   )
 }
 
-function FileItem({ file }: { file: FileInfo }) {
+function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void }) {
   const [isHovered, setIsHovered] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   const handleOpen = (e: React.MouseEvent, mode: 'reveal' | 'launch') => {
     e.stopPropagation()
@@ -110,6 +111,7 @@ function FileItem({ file }: { file: FileInfo }) {
     e.stopPropagation()
     if (!confirm(`Are you sure you want to move this file to trash?\n${file.name}`)) return
 
+    setIsDeleting(true)
     const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
     try {
       const response = await fetch(`${apiHost}/api/delete`, {
@@ -120,9 +122,11 @@ function FileItem({ file }: { file: FileInfo }) {
       if (!response.ok) {
         throw new Error(await response.text())
       }
+      if (onRefresh) onRefresh()
     } catch (err) {
       console.error("Failed to delete file:", err)
       alert("Error: " + err)
+      setIsDeleting(false)
     }
   }
 
@@ -150,9 +154,15 @@ function FileItem({ file }: { file: FileInfo }) {
         </button>
         <button
           onClick={handleDelete}
-          className="p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-red-400 transition-all"
+          disabled={isDeleting}
+          className={`p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-red-400 transition-all ${isDeleting ? 'opacity-50 cursor-wait' : ''}`}
+          title="Delete/Trash File"
         >
-          <Trash2 className="w-4 h-4" />
+          {isDeleting ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Trash2 className="w-4 h-4" />
+          )}
         </button>
       </div>
 
@@ -212,47 +222,46 @@ export default function Dashboard() {
     }
   }
 
+  const fetchData = useCallback(async () => {
+    try {
+      const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+      const response = await fetch(`${apiHost}/api/report`)
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+
+      const report: Report = await response.json()
+      console.log("📊 Data received:", {
+        files: report.total_files,
+        sizeGroups: report.size_groups?.length || 0,
+        similarPairs: report.similar_pairs?.length || 0
+      })
+
+      setData(report)
+
+      if (report.status === 'finished' && status === 'analyzing' && !notified) {
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          new Notification('🔍 Analysis Complete!', {
+            body: `Found ${report.similar_pairs?.length || 0} similar file pairs.`,
+            icon: '/favicon.ico'
+          })
+        }
+        setNotified(true)
+      }
+
+      setStatus(report.status || 'finished')
+      setLoading(false)
+    } catch (err) {
+      console.error("❌ Fetch error:", err)
+      setError(err instanceof Error ? err.message : String(err))
+      setLoading(false)
+    }
+  }, [status, notified])
+
   useEffect(() => {
     if (!mounted) return
-
-    const fetchData = async () => {
-      try {
-        const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
-        const response = await fetch(`${apiHost}/api/report`)
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-
-        const report: Report = await response.json()
-        console.log("📊 Data received:", {
-          files: report.total_files,
-          sizeGroups: report.size_groups?.length || 0,
-          similarPairs: report.similar_pairs?.length || 0
-        })
-
-        setData(report)
-
-        if (report.status === 'finished' && status === 'analyzing' && !notified) {
-          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-            new Notification('🔍 Analysis Complete!', {
-              body: `Found ${report.similar_pairs?.length || 0} similar file pairs.`,
-              icon: '/favicon.ico'
-            })
-          }
-          setNotified(true)
-        }
-
-        setStatus(report.status || 'finished')
-        setLoading(false)
-      } catch (err) {
-        console.error("❌ Fetch error:", err)
-        setError(err instanceof Error ? err.message : String(err))
-        setLoading(false)
-      }
-    }
-
     fetchData()
     const interval = setInterval(fetchData, 5000)
     return () => clearInterval(interval)
-  }, [status, notified, mounted])
+  }, [mounted, fetchData])
 
   const filteredSizeGroups = useMemo(() => {
     if (!data?.size_groups) return []
@@ -352,7 +361,7 @@ export default function Dashboard() {
           <h1 className="text-4xl font-black tracking-tight flex items-center gap-3">
             <span className="bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">ARCHIVE</span>
             <span className="text-white">FINDER</span>
-            <div className="px-2 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-[10px] text-blue-400 uppercase tracking-widest font-bold">Intelligence v1.1</div>
+            <div className="px-2 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-[10px] text-blue-400 uppercase tracking-widest font-bold">Intelligence v1.1.1</div>
           </h1>
           <p className="text-gray-500 mt-1 font-medium tracking-wide">3D Asset Deduplication & Management Dashboard</p>
         </div>
@@ -509,7 +518,7 @@ export default function Dashboard() {
                     </div>
                     <div className="space-y-2">
                       {group.files.map((file, fi) => (
-                        <FileItem key={fi} file={file} />
+                        <FileItem key={fi} file={file} onRefresh={fetchData} />
                       ))}
                     </div>
                   </motion.div>
@@ -530,13 +539,13 @@ export default function Dashboard() {
                         </div>
 
                         <div className="space-y-3 mt-2">
-                          <FileItem file={pair.file1} />
+                          <FileItem file={pair.file1} onRefresh={fetchData} />
                           <div className="flex justify-center -my-2 relative z-10">
                             <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center scale-90 shadow-lg shadow-blue-500/20">
                               <Search className="w-3 h-3 text-white" />
                             </div>
                           </div>
-                          <FileItem file={pair.file2} />
+                          <FileItem file={pair.file2} onRefresh={fetchData} />
                         </div>
                       </div>
                     </div>
