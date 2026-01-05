@@ -29,11 +29,13 @@ This document outlines the roadmap to transform **Archive Duplicate Finder** fro
   - Quantize space into a 32x32x32 grid (Voxels).
   - Generate a hash based on occupied voxels ("Voxel Hash").
 
-### 2.2 Content Analyzer + Render Discovery
+### 2.2 Content Analyzer + Render Discovery - ✅ COMPLETED
 - **Objective:** Better understanding of archive contents.
-- **Tasks:**
+- **Implemented:**
+  - **Render Extractor:** Automatically searches for and extracts the **largest** image file (`.jpg`, `.png`, `.webp`) inside archives to use as a high-quality preview thumbnail.
+  - Smart image detection across ZIP, RAR, and 7Z formats.
+- **Pending:**
   - Improved multi-volume detection (verify if `part1` to `partN` are all present).
-  - **Render Extractor:** Automatically search for and extract the largest image file (`.jpg`, `.png`) inside archives to use as a preview thumbnail.
 
 ---
 

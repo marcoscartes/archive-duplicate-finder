@@ -30,16 +30,23 @@ func ExtractArchive(archivePath string) (map[string][]byte, error) {
 }
 
 // FindFirstImageInArchive returns the contents of the first image (jpg, jpeg, png) found in the archive
+// Deprecated: Use FindLargestImageInArchive for better quality previews
 func FindFirstImageInArchive(archivePath string) ([]byte, string, error) {
+	return FindLargestImageInArchive(archivePath)
+}
+
+// FindLargestImageInArchive returns the contents of the largest image file in the archive
+// This is useful for finding high-quality render previews
+func FindLargestImageInArchive(archivePath string) ([]byte, string, error) {
 	ext := strings.ToLower(filepath.Ext(archivePath))
 
 	switch ext {
 	case ".zip":
-		return findFirstImageZIP(archivePath)
+		return findLargestImageZIP(archivePath)
 	case ".rar":
-		return findFirstImageRAR(archivePath)
+		return findLargestImageRAR(archivePath)
 	case ".7z":
-		return findFirstImage7Z(archivePath)
+		return findLargestImage7Z(archivePath)
 	default:
 		return nil, "", fmt.Errorf("unsupported archive format: %s", ext)
 	}
@@ -50,6 +57,43 @@ func isImageFile(filename string) bool {
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
 }
 
+func findLargestImageZIP(archivePath string) ([]byte, string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize int64
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && isImageFile(file.Name) {
+			// Check if this image is larger than the current largest
+			if file.UncompressedSize64 > uint64(largestSize) {
+				rc, err := file.Open()
+				if err != nil {
+					continue
+				}
+				data, err := io.ReadAll(rc)
+				rc.Close()
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = file.Name
+					largestSize = int64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no image found")
+	}
+	return largestData, largestName, nil
+}
+
+// Keep old function for backwards compatibility
 func findFirstImageZIP(archivePath string) ([]byte, string, error) {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
@@ -73,6 +117,45 @@ func findFirstImageZIP(archivePath string) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("no image found")
 }
 
+func findLargestImageRAR(archivePath string) ([]byte, string, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize int64
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+
+		if !header.IsDir && isImageFile(header.Name) {
+			if header.UnPackedSize > largestSize {
+				data, err := io.ReadAll(reader)
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = header.Name
+					largestSize = int64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no image found")
+	}
+	return largestData, largestName, nil
+}
+
+// Keep old function for backwards compatibility
 func findFirstImageRAR(archivePath string) ([]byte, string, error) {
 	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
@@ -99,6 +182,42 @@ func findFirstImageRAR(archivePath string) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("no image found")
 }
 
+func findLargestImage7Z(archivePath string) ([]byte, string, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize int64
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && isImageFile(file.Name) {
+			if int64(file.UncompressedSize) > largestSize {
+				rc, err := file.Open()
+				if err != nil {
+					continue
+				}
+				data, err := io.ReadAll(rc)
+				rc.Close()
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = file.Name
+					largestSize = int64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no image found")
+	}
+	return largestData, largestName, nil
+}
+
+// Keep old function for backwards compatibility
 func findFirstImage7Z(archivePath string) ([]byte, string, error) {
 	reader, err := sevenzip.OpenReader(archivePath)
 	if err != nil {
