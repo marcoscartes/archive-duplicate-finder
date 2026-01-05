@@ -45,6 +45,7 @@ interface Report {
   size_groups: SizeGroup[]
   similar_pairs: SimilarPair[]
   analysis_duration_seconds: number
+  status?: string
 }
 
 function PreviewImage({ path }: { path: string }) {
@@ -105,6 +106,26 @@ function FileItem({ file }: { file: FileInfo }) {
       .catch(err => console.error(`Failed to ${mode} file:`, err))
   }
 
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm(`Are you sure you want to move this file to trash?\n${file.name}`)) return
+
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    try {
+      const response = await fetch(`${apiHost}/api/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: file.path })
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+    } catch (err) {
+      console.error("Failed to delete file:", err)
+      alert("Error: " + err)
+    }
+  }
+
   return (
     <div
       className="relative flex items-center gap-3 p-3 bg-white/5 rounded-xl group/file cursor-pointer hover:bg-white/[0.08] transition-all"
@@ -127,7 +148,10 @@ function FileItem({ file }: { file: FileInfo }) {
         >
           <Folder className="w-4 h-4" />
         </button>
-        <button className="p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-red-400 transition-all">
+        <button
+          onClick={handleDelete}
+          className="p-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-red-400 transition-all"
+        >
           <Trash2 className="w-4 h-4" />
         </button>
       </div>
@@ -158,23 +182,48 @@ export default function Dashboard() {
   const [selectedItem, setSelectedItem] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [fileType, setFileType] = useState('all')
+  const [status, setStatus] = useState<string | null>(null) // New state for status
+  const [notified, setNotified] = useState(false) // New state for notification
+
+  const requestNotificationPermission = () => {
+    if ('Notification' in window) {
+      Notification.requestPermission()
+    }
+  }
 
   useEffect(() => {
-    // Detect API host (either localhost:8080 or the same origin)
-    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    const fetchData = async () => {
+      try {
+        const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+        const response = await fetch(`${apiHost}/api/report`)
+        const report: Report = await response.json()
+        setData(report)
 
-    fetch(`${apiHost}/api/report`)
-      .then(res => res.json())
-      .then(d => {
-        setData(d)
+        // Handle notification
+        // Only notify if status transitions from 'analyzing' to 'finished' and not already notified
+        if (report.status === 'finished' && status === 'analyzing' && !notified) {
+          if (Notification.permission === 'granted') {
+            new Notification('🔍 Analysis Complete!', {
+              body: `Found ${report.similar_pairs.length} similar file pairs.`,
+              icon: '/favicon.ico'
+            })
+          }
+          setNotified(true)
+        }
+
+        setStatus(report.status || null)
         setLoading(false)
-      })
-      .catch(err => {
+      } catch (err) {
         console.error(err)
         setError("Could not connect to the Archive Finder backend. Make sure it's running with the -web flag.")
         setLoading(false)
-      })
-  }, [])
+      }
+    }
+
+    fetchData() // Initial fetch
+    const interval = setInterval(fetchData, 3000) // Poll every 3 seconds
+    return () => clearInterval(interval) // Cleanup interval on component unmount
+  }, [status, notified]) // Dependencies for useEffect
 
   if (loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white">
@@ -242,9 +291,19 @@ export default function Dashboard() {
           <p className="text-gray-500 mt-1 font-medium tracking-wide">3D Asset Deduplication & Management Dashboard</p>
         </div>
         <div className="flex gap-4">
-          <div className="flex items-center gap-2 px-4 py-2 glass-card rounded-full border border-white/5">
-            <ShieldCheck className="w-4 h-4 text-green-500" />
-            <span className="text-xs font-bold text-gray-400 uppercase tracking-tighter">System Protected</span>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={requestNotificationPermission}
+              className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-medium text-gray-400 transition-all border border-white/10"
+            >
+              🔔 Enable Notifications
+            </button>
+            <div className="flex items-center gap-2 px-4 py-2 bg-white/5 rounded-xl border border-white/10">
+              <div className={`w-2 h-2 rounded-full ${data?.status === 'finished' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-yellow-500 animate-pulse'}`} />
+              <span className="text-xs font-medium text-gray-300 uppercase tracking-widest">
+                {data?.status || 'Analyzing'}
+              </span>
+            </div>
           </div>
         </div>
       </header>

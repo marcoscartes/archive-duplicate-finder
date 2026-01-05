@@ -28,7 +28,7 @@ func FindSimilarNames(files []scanner.ArchiveFile, threshold int) []SimilarPair 
 		return nil
 	}
 
-	// 1. Pre-normalize all names to avoid repeating normalization in loops
+	// 1. Pre-normalize all names
 	normalized := make([]NormalizedFile, len(files))
 	for i, f := range files {
 		normalized[i] = NormalizedFile{
@@ -40,73 +40,65 @@ func FindSimilarNames(files []scanner.ArchiveFile, threshold int) []SimilarPair 
 	// 2. Setup parallel processing
 	numWorkers := runtime.NumCPU()
 	var wg sync.WaitGroup
-	pairsChan := make(chan SimilarPair, len(normalized))
+	pairsChan := make(chan SimilarPair, 1000)
 
-	// Create a channel to distribute work
-	type job struct {
-		i, j int
-	}
-	jobsChan := make(chan job, 1000)
-
-	// Start workers
+	// Work distribution: Split the outer loop among workers
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
-			for jb := range jobsChan {
-				f1 := normalized[jb.i]
-				f2 := normalized[jb.j]
 
-				// Skip if same size
-				if f1.File.Size == f2.File.Size {
-					continue
-				}
+			// Each worker handles a subset of the outer loop
+			for i := workerID; i < len(normalized); i += numWorkers {
+				f1 := normalized[i]
 
-				// Fast path: quick length check
-				len1 := utf8.RuneCountInString(f1.NormalizedName)
-				len2 := utf8.RuneCountInString(f2.NormalizedName)
-				if len1 > 0 && len2 > 0 {
-					ratio := float64(len1) / float64(len2)
-					if ratio < 0.4 || ratio > 2.5 {
-						continue // Too different in length to meet typical thresholds
+				for j := i + 1; j < len(normalized); j++ {
+					f2 := normalized[j]
+
+					// Skip if same size (likely handled by Step 2)
+					if f1.File.Size == f2.File.Size {
+						continue
 					}
-				}
 
-				// Perform comparison
-				similarity := CalculateNormalizedSimilarity(f1.NormalizedName, f2.NormalizedName)
+					// Fast path: quick length check
+					len1 := utf8.RuneCountInString(f1.NormalizedName)
+					len2 := utf8.RuneCountInString(f2.NormalizedName)
+					if len1 > 0 && len2 > 0 {
+						ratio := float64(len1) / float64(len2)
+						if ratio < 0.4 || ratio > 2.5 {
+							continue
+						}
+					}
 
-				if similarity >= float64(threshold) {
-					pairsChan <- SimilarPair{
-						File1:      f1.File,
-						File2:      f2.File,
-						Similarity: similarity,
+					// Perform comparison
+					similarity := CalculateNormalizedSimilarity(f1.NormalizedName, f2.NormalizedName)
+
+					if similarity >= float64(threshold) {
+						pairsChan <- SimilarPair{
+							File1:      f1.File,
+							File2:      f2.File,
+							Similarity: similarity,
+						}
 					}
 				}
 			}
-		}()
+		}(w)
 	}
 
-	// Send jobs to workers
-	go func() {
-		for i := 0; i < len(normalized); i++ {
-			for j := i + 1; j < len(normalized); j++ {
-				jobsChan <- job{i, j}
-			}
-		}
-		close(jobsChan)
-	}()
-
-	// Close pairs channel once all workers are done
-	go func() {
-		wg.Wait()
-		close(pairsChan)
-	}()
-
-	// Collect results
+	// Collect results in a separate goroutine
+	resultsWg := sync.WaitGroup{}
 	var pairs []SimilarPair
-	for p := range pairsChan {
-		pairs = append(pairs, p)
-	}
+	resultsWg.Add(1)
+	go func() {
+		defer resultsWg.Done()
+		for p := range pairsChan {
+			pairs = append(pairs, p)
+		}
+	}()
+
+	wg.Wait()
+	close(pairsChan)
+	resultsWg.Wait()
 
 	return pairs
 }

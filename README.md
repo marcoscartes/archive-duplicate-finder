@@ -15,7 +15,8 @@
 
 ## 🚀 Features
 
-- **🔍 Smart Scanning:** Detects ZIP, RAR, and 7Z archives recursively.
+- **⚡ Lightning Fast Caching:** SQLite-backed persistence remembers your duplicates to skip re-scanning.
+- **🔔 Live Notifications:** Receive browser alerts when background analysis finishes.
 - **🌐 Interactive Web Dashboard:** Premium UI built with Next.js and Fiber for visual results management.
 - **🖼️ Archive Intelligence Preview:** Hover over archives to see the first image found inside without extraction.
 - **⚖️ Size Matching:** Instantly identifies files with identical byte sizes but different names.

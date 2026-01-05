@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"archive-duplicate-finder/internal/archive"
+	"archive-duplicate-finder/internal/db"
 	"archive-duplicate-finder/internal/reporter"
 	"archive-duplicate-finder/internal/scanner"
 	"archive-duplicate-finder/internal/similarity"
@@ -77,6 +78,17 @@ func main() {
 		TotalFiles:       len(files),
 		AnalysisDuration: elapsed.Seconds(),
 		Timestamp:        time.Now().Format("2006-01-02 15:04:05"),
+		Status:           "analyzing",
+	}
+
+	// Initialize Cache
+	cache, err := db.NewCache()
+	var fingerprint string
+	if err != nil {
+		log.Printf("⚠️  Could not initialize cache: %v", err)
+	} else {
+		defer cache.Close()
+		fingerprint = cache.CalculateFingerprint(files)
 	}
 
 	// Step 2: Identical Size
@@ -103,7 +115,7 @@ func main() {
 
 	// Start web dashboard early if requested
 	if config.Web {
-		srv := web.NewServer(config.Port, finalReport)
+		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef)
 		go func() {
 			if err := srv.Start(); err != nil {
 				log.Printf("❌ Web server error: %v", err)
@@ -123,13 +135,27 @@ func main() {
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 		runStep3 := func() []reporter.SimilarPair {
+			// Check cache first
+			if cache != nil && !config.Interactive {
+				if cachedPairs, found := cache.GetSimilarities(fingerprint); found {
+					fmt.Println("♻️  Step 3: Found cached results, skipping analysis!")
+					return cachedPairs
+				}
+			}
+
 			similarPairs := similarity.FindSimilarNames(files, config.Threshold)
 			pairs := analyzeSimilarNameDifferentSize(similarPairs, config.Verbose, config)
+
+			// Save to cache
+			if cache != nil && !config.Interactive {
+				cache.PutSimilarities(fingerprint, pairs)
+			}
 
 			if config.PDFFile != "" {
 				report3 := baseReport
 				report3.SimilarPairs = pairs
 				report3.SizeGroups = finalSizeGroups // Include size groups in the final one too
+				report3.Status = "finished"
 				pdfName := "Final_Full_" + config.PDFFile
 				reporter.ExportPDF(report3, pdfName)
 				fmt.Printf("\n✅ Step 3 analysis FINISHED. Final PDF ready: %s\n", pdfName)
@@ -140,20 +166,24 @@ func main() {
 		if config.Interactive {
 			// Run sequentially for interactivity to handle stdin correctly
 			finalSimilarPairs = runStep3()
+			finalReport.Status = "finished"
 		} else {
 			// Run in background
-			done := make(chan []reporter.SimilarPair)
 			go func() {
-				done <- runStep3()
+				results := runStep3()
+				finalReport.SimilarPairs = results
+				finalReport.Status = "finished"
+				finalReport.AnalysisDuration = time.Since(startTime).Seconds()
 			}()
 
 			fmt.Println("ℹ️  You can already check the dashboard while Step 3 works.")
 			fmt.Println("   Press Ctrl+C to stop the process if finished.")
-			finalSimilarPairs = <-done
 		}
 
-		// Update the shared report with results
+		// Update the shared report with initial results (might be empty or cached)
 		finalReport.SimilarPairs = finalSimilarPairs
+	} else {
+		finalReport.Status = "finished"
 	}
 
 	elapsedTotal := time.Since(startTime)

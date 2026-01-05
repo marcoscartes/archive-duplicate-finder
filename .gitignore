@@ -6,6 +6,7 @@
 *.dylib
 archive-finder
 archive-finder.exe
+*.bat
 
 # Test binary
 *.test

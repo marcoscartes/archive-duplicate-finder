@@ -13,6 +13,7 @@ type Report struct {
 	SimilarPairs     []SimilarPair `json:"similar_pairs"`
 	AnalysisDuration float64       `json:"analysis_duration_seconds"`
 	Timestamp        string        `json:"timestamp"`
+	Status           string        `json:"status"` // "analyzing", "finished"
 }
 
 // SizeGroup represents files with identical size

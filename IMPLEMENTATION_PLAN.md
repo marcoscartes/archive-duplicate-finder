@@ -7,12 +7,9 @@ This document outlines the roadmap to transform **Archive Duplicate Finder** fro
 ## 🛠️ Phase 1: Performance & Persistence (Foundation)
 *Focuses on Point 6 and prepares the ground for caching.*
 
-### 1.1 Local Database Integration (SQLite)
+### 1.1 Local Database Integration (SQLite) - ✅ COMPLETED
 - **Objective:** Avoid re-scanning files that haven't changed.
-- **Tasks:**
-  - Implement a `internal/database` package using `modernc.org/sqlite`.
-  - Store `file_path`, `size`, `mod_time`, `hash`, and `stl_metadata`.
-  - Add logic to verify `mod_time` and `size` before re-hashing a file.
+- **Implemented:** `internal/db` with fingerprinting and similarity caching.
 
 ### 1.2 File System Watcher
 - **Objective:** Real-time background indexing.
@@ -43,22 +40,18 @@ This document outlines the roadmap to transform **Archive Duplicate Finder** fro
 ## 🛠️ Phase 3: Extended Cleanup Features
 *Focuses on Point 5.*
 
-### 3.1 "Safe Move" & Trash Logic
+### 3.1 "Safe Move" & Trash Logic - ✅ COMPLETED
 - **Objective:** Reduce the risk of data loss.
-- **Tasks:**
-  - Implement a `--move-to "/path/trash"` flag.
-  - Create a "Reference Link" feature: when deleting, leave a `.duplicate.txt` file pointing to the path of the preserved original.
+- **Implemented:** `--trash` and `--ref` flags, integrated with Dashboard and CLI.
 
 ---
 
 ## 🛠️ Phase 4: Web Dashboard & Visual Excellence
 *Focuses on Point 1.*
 
-### 4.1 Embedded Web Server
+### 4.1 Embedded Web Server - ✅ COMPLETED
 - **Objective:** A premium visual interface.
-- **Tasks:**
-  - Use `Fiber` or `Echo` to serve a modern React/Next.js dashboard.
-  - Implement a REST API to fetch discovered duplicates and system stats.
+- **Implemented:** Next.js Dashboard with Go Fiber backend, Search, Filters, and Hover Previews.
 
 ### 4.2 Interactive 3D Comparison
 - **Objective:** Visual verification before deletion.

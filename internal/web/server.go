@@ -4,10 +4,13 @@ import (
 	"archive-duplicate-finder/internal/archive"
 	"archive-duplicate-finder/internal/reporter"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -15,15 +18,20 @@ import (
 
 // Server represents the web dashboard server
 type Server struct {
-	addr   string
-	report *reporter.Report
+	addr      string
+	report    *reporter.Report
+	trashPath string
+	leaveRef  bool
+	mu        sync.Mutex
 }
 
 // NewServer creates a new web dashboard server
-func NewServer(port int, report *reporter.Report) *Server {
+func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool) *Server {
 	return &Server{
-		addr:   fmt.Sprintf(":%d", port),
-		report: report,
+		addr:      fmt.Sprintf(":%d", port),
+		report:    report,
+		trashPath: trashPath,
+		leaveRef:  leaveRef,
 	}
 }
 
@@ -112,6 +120,65 @@ func (s *Server) Start() error {
 		if err := cmd.Start(); err != nil {
 			return c.Status(500).SendString(err.Error())
 		}
+		return c.SendStatus(200)
+	})
+
+	api.Post("/delete", func(c *fiber.Ctx) error {
+		type deleteRequest struct {
+			Path string `json:"path"`
+		}
+		var req deleteRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).SendString("Invalid request body")
+		}
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// 1. Perform FS action
+		if s.trashPath != "" {
+			if _, err := os.Stat(s.trashPath); os.IsNotExist(err) {
+				os.MkdirAll(s.trashPath, 0755)
+			}
+			dest := filepath.Join(s.trashPath, filepath.Base(req.Path))
+			if err := os.Rename(req.Path, dest); err != nil {
+				// Fallback to delete if move fails (different drives)
+				if err := os.Remove(req.Path); err != nil {
+					return c.Status(500).SendString(err.Error())
+				}
+			}
+			if s.leaveRef {
+				refPath := req.Path + ".duplicate.txt"
+				content := fmt.Sprintf("Archive Duplicate Finder\nOriginal kept: ... (Dashboard Action)\nDate: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+				_ = os.WriteFile(refPath, []byte(content), 0644)
+			}
+		} else {
+			if err := os.Remove(req.Path); err != nil {
+				return c.Status(500).SendString(err.Error())
+			}
+		}
+
+		// 2. Remove from report
+		// Remove from Similarity Pairs
+		newPairs := make([]reporter.SimilarPair, 0)
+		for _, p := range s.report.SimilarPairs {
+			if p.File1.Path != req.Path && p.File2.Path != req.Path {
+				newPairs = append(newPairs, p)
+			}
+		}
+		s.report.SimilarPairs = newPairs
+
+		// Remove from Size Groups
+		for i := range s.report.SizeGroups {
+			newFiles := make([]reporter.FileInfo, 0)
+			for _, f := range s.report.SizeGroups[i].Files {
+				if f.Path != req.Path {
+					newFiles = append(newFiles, f)
+				}
+			}
+			s.report.SizeGroups[i].Files = newFiles
+		}
+
 		return c.SendStatus(200)
 	})
 
