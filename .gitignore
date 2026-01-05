@@ -50,3 +50,6 @@ reports/
 # Cache
 .cache/
 *.cache
+
+# Dist
+dist/
