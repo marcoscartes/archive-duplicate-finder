@@ -16,6 +16,8 @@
 ## 🚀 Features
 
 - **⚡ Lightning Fast Caching:** SQLite-backed persistence remembers your duplicates to skip re-scanning.
+- **🚀 Turbo Mode:** Experimental high-performance Bit-Parallel engine for extreme concurrent throughput.
+- **📊 Smart Pagination:** Smoothly handles massive datasets with configurable page sizes (10, 20, 50, 100).
 - **🔔 Live Notifications:** Receive browser alerts when background analysis finishes.
 - **🌐 Interactive Web Dashboard:** Premium UI built with Next.js and Fiber for visual results management.
 - **🖼️ Archive Intelligence Preview:** Hover over archives to see the first image found inside without extraction.
@@ -96,10 +98,12 @@ go build -o archive-finder ./cmd/finder
 ## 🤝 Acknowledgement
 
 This software was built and refined with the assistance of **Antigravity**, an AI agent specialized in advanced coding tasks. Antigravity helped implement:
-- Parallel string similarity processing.
+- Parallel string similarity processing with Bit-Parallel Myers Algorithm.
 - Glassmorphic Web Dashboard with Next.js/Three.js.
 - Real-time archive preview (On-Hover extraction).
 - Multi-platform Explorer/Reveal integration.
+- Smart pagination and data virtualization for massive datasets.
+- GPU/Turbo acceleration mode for high-performance scanning.
 - PDF reporting modules.
 - Multi-volume archive detection logic.
 - Interactive CLI resolution menus.
