@@ -18,6 +18,66 @@ type ArchiveFile struct {
 	FileCount int       // Number of files inside
 }
 
+// IsMultiVolumePart returns true if the file looks like a part of a multi-volume archive.
+// It returns (isPart, baseName, partSuffix)
+func (f ArchiveFile) IsMultiVolumePart() (bool, string, string) {
+	name := strings.ToLower(f.Name)
+
+	// common separators for "partN"
+	separators := []string{".part", "_part", "-part", " part"}
+	for _, sep := range separators {
+		if strings.Contains(name, sep) {
+			idx := strings.LastIndex(name, sep)
+			base := name[:idx]
+			rest := name[idx+len(sep):]
+
+			// Extract digits until next separator or extension
+			partNum := ""
+			for _, char := range rest {
+				if char >= '0' && char <= '9' {
+					partNum += string(char)
+				} else {
+					break
+				}
+			}
+
+			if len(partNum) > 0 {
+				return true, base, partNum
+			}
+		}
+	}
+
+	// Pattern: .001, .002 or .1, .2, .3 (at the very end)
+	ext := filepath.Ext(name)
+	if len(ext) >= 2 && ext[0] == '.' {
+		// Verify if it's mostly digits
+		partNum := ext[1:]
+		isDigits := true
+		if len(partNum) == 0 {
+			isDigits = false
+		}
+		for _, char := range partNum {
+			if char < '0' || char > '9' {
+				isDigits = false
+				break
+			}
+		}
+		if isDigits {
+			base := name[:len(name)-len(ext)]
+			// Special case: if base still has an extension like .zip, remove it too for better set matching
+			if subExt := filepath.Ext(base); subExt != "" {
+				// but only if it's a known archive type
+				if subExt == ".zip" || subExt == ".rar" || subExt == ".7z" || subExt == ".tar" || subExt == ".gz" {
+					base = base[:len(base)-len(subExt)]
+				}
+			}
+			return true, base, partNum
+		}
+	}
+
+	return false, "", ""
+}
+
 // ScanDirectory scans a directory for archive files
 func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 	var files []ArchiveFile

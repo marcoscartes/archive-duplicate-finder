@@ -63,6 +63,13 @@ func FindSimilarNames(files []scanner.ArchiveFile, threshold int, turbo bool) []
 						continue
 					}
 
+					// Skip if they are different parts of the same multi-volume set
+					is1, base1, p1 := f1.File.IsMultiVolumePart()
+					is2, base2, p2 := f2.File.IsMultiVolumePart()
+					if is1 && is2 && base1 == base2 && p1 != p2 {
+						continue
+					}
+
 					// Fast path: quick length check
 					len1 := utf8.RuneCountInString(f1.NormalizedName)
 					len2 := utf8.RuneCountInString(f2.NormalizedName)

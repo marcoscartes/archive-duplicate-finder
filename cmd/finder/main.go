@@ -277,6 +277,16 @@ func analyzeSameSizeDifferentName(sizeGroups map[int64][]scanner.ArchiveFile, th
 				// Calculate name similarity
 				sim := similarity.CalculateNameSimilarity(file1.Name, file2.Name)
 
+				// Skip if they are different parts of the same multi-volume set
+				is1, base1, p1 := file1.IsMultiVolumePart()
+				is2, base2, p2 := file2.IsMultiVolumePart()
+				if is1 && is2 && base1 == base2 && p1 != p2 {
+					if verbose {
+						fmt.Printf("  ⏩ Skipping multi-volume set parts: %s vs %s\n", file1.Name, file2.Name)
+					}
+					continue
+				}
+
 				if sim >= float64(threshold) {
 					fmt.Printf("  📄 %s (Mod: %v)\n", file1.Name, file1.ModTime.Format("2006-01-02 15:04"))
 					fmt.Printf("  📄 %s (Mod: %v)\n", file2.Name, file2.ModTime.Format("2006-01-02 15:04"))
