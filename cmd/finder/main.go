@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"archive-duplicate-finder/internal/archive"
 	"archive-duplicate-finder/internal/db"
 	"archive-duplicate-finder/internal/reporter"
 	"archive-duplicate-finder/internal/scanner"
@@ -40,6 +39,7 @@ type Config struct {
 	Port        int    // Web server port
 	GPUTurbo    bool   // Experimental high-performance mode
 	Debug       bool   // Enable detailed debug logging
+	RunStep3    bool   // Explicitly run Step 3 (Similarity Check)
 }
 
 func main() {
@@ -91,12 +91,12 @@ func main() {
 
 	// Initialize Cache
 	cache, err := db.NewCache()
-	var fingerprint string
+	// var fingerprint string
 	if err != nil {
 		log.Printf("⚠️  Could not initialize cache: %v", err)
 	} else {
 		defer cache.Close()
-		fingerprint = cache.CalculateFingerprint(files)
+		// fingerprint = cache.CalculateFingerprint(files)
 	}
 
 	// Step 2: Identical Size
@@ -121,9 +121,136 @@ func main() {
 	finalReport := &baseReport
 	finalReport.SizeGroups = finalSizeGroups
 
-	// Start web dashboard early if requested
+	// Step 3 Context
+	var runStep3Trigger func()
+
+	// Step 3: Similar Names Logic
+	var finalSimilarGroups []reporter.SimilarityGroup
+	if config.Mode == "all" || config.Mode == "name" {
+		runStep3Job := func() []reporter.SimilarityGroup {
+			// Check cache (TODO: Update cache logic for groups if needed, for now skip cache for groups to ensure correctness)
+			// if cache != nil ... (Skip mostly because struct changed)
+
+			if config.GPUTurbo {
+				log.Printf("🚀 TURBO MODE: Maximizing parallel compute throughput...")
+			}
+
+			// Define progress callback
+			onProgress := func(p float64) {
+				finalReport.Progress = p
+				// Print visual progress bar in CLI if not in quiet mode
+				if !config.Web {
+					// Simple CLI progress - overwrites line
+					fmt.Printf("\r⏳ Similarity Analysis: [%-20s] %.1f%%",
+						strings.Repeat("=", int(p/5)), p)
+				}
+			}
+
+			// Use new Clustering Algorithm (O(N)) with Progress
+			simGroups := similarity.FindSimilarGroups(files, config.Threshold, config.GPUTurbo, config.Debug, onProgress)
+
+			if !config.Web {
+				fmt.Println() // New line after progress bar
+			}
+
+			// Convert to Reporter types
+			var results []reporter.SimilarityGroup
+			for _, g := range simGroups {
+				var fileInfos []reporter.FileInfo
+				for _, f := range g.Files {
+					fileInfos = append(fileInfos, reporter.FileInfo{
+						Name: f.Name,
+						Path: f.Path,
+						Size: f.Size,
+						Type: f.Type,
+					})
+				}
+				results = append(results, reporter.SimilarityGroup{
+					BaseName: g.BaseName,
+					Files:    fileInfos,
+				})
+			}
+			return results
+		}
+
+		// Define the trigger function (that wraps the job and acts on results)
+		runStep3Trigger = func() {
+			if finalReport.SimilarCount > 0 || finalReport.Status == "finished_step3" {
+				log.Println("ℹ️  Step 3 already ran or results are present.")
+				return
+			}
+
+			log.Println("📝 Step 3: Similar name analysis STARTED (Clustering Mode)...")
+
+			// Set status to analyzing to trigger UI progress bar
+			finalReport.Status = "analyzing_step3"
+			finalReport.Progress = 0
+
+			results := runStep3Job()
+
+			// Update Cache (omitted for now due to struct change)
+
+			finalReport.SimilarGroups = results
+			finalReport.SimilarCount = len(results)
+			finalReport.AnalysisDuration = time.Since(startTime).Seconds()
+			finalReport.Status = "finished"
+
+			log.Printf("✅ Step 3 analysis FINISHED. Found %d similarity clusters.", len(results))
+
+			// Print textual summary of groups
+			for i, g := range results {
+				if i >= 10 && !config.Verbose {
+					if i == 10 {
+						fmt.Println("... (Use --verbose to see all groups)")
+					}
+					continue
+				}
+				fmt.Printf("🔍 Cluster: '%s' (%d files)\n", g.BaseName, len(g.Files))
+				for _, f := range g.Files {
+					fmt.Printf("  • %s (%s)\n", f.Name, formatBytes(f.Size))
+				}
+				fmt.Println()
+			}
+
+			if config.PDFFile != "" {
+				log.Println("⚠️  PDF Export for clusters not yet implemented.")
+			}
+		}
+
+		if config.Interactive {
+			// Interactive mode force
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			log.Println("📝 Step 3: Similar name analysis (Interactive Mode)")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			finalSimilarGroups = runStep3Job()
+			finalReport.SimilarGroups = finalSimilarGroups
+			finalReport.SimilarCount = len(finalSimilarGroups)
+			finalReport.Status = "finished"
+		} else {
+			// Background / On-Demand Mode
+			if config.RunStep3 {
+				fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+				if config.Web {
+					log.Println("📝 Step 3: Similar name analysis started in BACKGROUND...")
+					fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+					go runStep3Trigger()
+					fmt.Println("ℹ️  You can check the dashboard while Step 3 works.")
+				} else {
+					log.Println("📝 Step 3: Similar name analysis started...")
+					fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+					runStep3Trigger()
+				}
+			} else {
+				log.Println("ℹ️  Step 3 (Similarity Check) skipped. Use --check-similar or Dashboard to run it.")
+			}
+		}
+	} else {
+		finalReport.Status = "finished"
+	}
+
+	// Start web dashboard
 	if config.Web {
-		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef)
+		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger)
 		srv.SetDebug(config.Debug)
 		go func() {
 			if err := srv.Start(); err != nil {
@@ -132,79 +259,10 @@ func main() {
 		}()
 	}
 
-	// Step 3: Similar Names
-	var finalSimilarPairs []reporter.SimilarPair
-	if config.Mode == "all" || config.Mode == "name" {
-		fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		if config.Interactive {
-			log.Println("📝 Step 3: Similar name analysis (Interactive Mode)")
-		} else {
-			log.Println("📝 Step 3: Similar name analysis started in BACKGROUND...")
-		}
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-		runStep3 := func() []reporter.SimilarPair {
-			// Check cache first
-			if cache != nil && !config.Interactive {
-				if cachedPairs, found := cache.GetSimilarities(fingerprint); found {
-					fmt.Println("♻️  Step 3: Found cached results, skipping analysis!")
-					return cachedPairs
-				}
-			}
-
-			if config.GPUTurbo {
-				log.Printf("🚀 TURBO MODE: Maximizing parallel compute throughput...")
-			}
-
-			similarPairs := similarity.FindSimilarNames(files, config.Threshold, config.GPUTurbo, config.Debug)
-			pairs := analyzeSimilarNameDifferentSize(similarPairs, config.Verbose, config)
-
-			// Save to cache
-			if cache != nil && !config.Interactive {
-				cache.PutSimilarities(fingerprint, pairs)
-			}
-
-			if config.PDFFile != "" {
-				report3 := baseReport
-				report3.SimilarPairs = pairs
-				report3.SizeGroups = finalSizeGroups // Include size groups in the final one too
-				report3.Status = "finished"
-				pdfName := "Final_Full_" + config.PDFFile
-				reporter.ExportPDF(report3, pdfName)
-				fmt.Printf("\n✅ Step 3 analysis FINISHED. Final PDF ready: %s\n", pdfName)
-			}
-			return pairs
-		}
-
-		if config.Interactive {
-			// Run sequentially for interactivity to handle stdin correctly
-			finalSimilarPairs = runStep3()
-			finalReport.Status = "finished"
-		} else {
-			// Run in background
-			go func() {
-				results := runStep3()
-				finalReport.SimilarPairs = results
-				finalReport.SimilarCount = len(results)
-				finalReport.Status = "finished"
-				finalReport.AnalysisDuration = time.Since(startTime).Seconds()
-			}()
-
-			fmt.Println("ℹ️  You can already check the dashboard while Step 3 works.")
-			fmt.Println("   Press Ctrl+C to stop the process if finished.")
-		}
-
-		// Update the shared report with initial results (might be empty or cached)
-		finalReport.SimilarPairs = finalSimilarPairs
-		finalReport.SimilarCount = len(finalSimilarPairs)
-	} else {
-		finalReport.Status = "finished"
-	}
-
 	elapsedTotal := time.Since(startTime)
 	log.Printf("📈 Total processing time: %.2fs", elapsedTotal.Seconds())
 
-	// If web server is running, block indefinitely to keep it alive
+	// If web server is running, block indefinitely
 	if config.Web {
 		log.Println("📡 Dashboard is ACTIVE. Press Ctrl+C to shutdown.")
 		select {}
@@ -230,6 +288,7 @@ func parseFlags() Config {
 	flag.IntVar(&config.Port, "port", 8080, "Web server port")
 	flag.BoolVar(&config.GPUTurbo, "gpu", false, "Enable experimental GPU/Turbo acceleration (Bit-Parallel Engine)")
 	flag.BoolVar(&config.Debug, "debug", false, "Enable detailed debug logging for troubleshooting")
+	flag.BoolVar(&config.RunStep3, "check-similar", false, "Explicitly run Step 3 (Similarity Check). Default is on-demand.")
 
 	flag.Parse()
 
@@ -324,81 +383,6 @@ func analyzeSameSizeDifferentName(sizeGroups map[int64][]scanner.ArchiveFile, th
 	} else {
 		fmt.Printf("📊 Found %d groups with %d total files\n", groupCount, totalFiles)
 	}
-	return results
-}
-
-func analyzeSimilarNameDifferentSize(pairs []similarity.SimilarPair, verbose bool, config Config) []reporter.SimilarPair {
-	var results []reporter.SimilarPair
-	if len(pairs) == 0 {
-		fmt.Println("✅ No files with similar names and different sizes found")
-		return results
-	}
-
-	for i, pair := range pairs {
-		fmt.Printf("🔍 Comparison %d: %s ↔ %s\n", i+1, pair.File1.Name, pair.File2.Name)
-		fmt.Printf("  📊 Name similarity: %.1f%%\n", pair.Similarity)
-		fmt.Printf("  📏 Size: %s ↔ %s", formatBytes(pair.File1.Size), formatBytes(pair.File2.Size))
-
-		results = append(results, reporter.SimilarPair{
-			File1: reporter.FileInfo{
-				Name: pair.File1.Name,
-				Path: pair.File1.Path,
-				Size: pair.File1.Size,
-				Type: pair.File1.Type,
-			},
-			File2: reporter.FileInfo{
-				Name: pair.File2.Name,
-				Path: pair.File2.Path,
-				Size: pair.File2.Size,
-				Type: pair.File2.Type,
-			},
-			Similarity: pair.Similarity,
-		})
-
-		sizeDiff := pair.File2.Size - pair.File1.Size
-		if sizeDiff > 0 {
-			fmt.Printf(" (+%s)\n", formatBytes(sizeDiff))
-		} else {
-			fmt.Printf(" (-%s)\n", formatBytes(-sizeDiff))
-		}
-
-		// Cleanup logic
-		if config.DeleteMode != "" || config.Interactive {
-			// For similar name/different size, we need to extract to see "which contains less"
-			if config.DeleteMode == "contents" || (config.Interactive && config.DeleteMode == "contents") {
-				contents1, _ := archive.ExtractArchive(pair.File1.Path)
-				contents2, _ := archive.ExtractArchive(pair.File2.Path)
-				pair.File1.FileCount = len(contents1)
-				pair.File2.FileCount = len(contents2)
-			}
-			handleCleanup(pair.File1, pair.File2, config)
-		}
-
-		// Extract and compare contents (only if verbose mode is on)
-		if verbose {
-			fmt.Println("\n  📦 Extracting archives...")
-
-			contents1, err1 := archive.ExtractArchive(pair.File1.Path)
-			contents2, err2 := archive.ExtractArchive(pair.File2.Path)
-
-			if err1 != nil || err2 != nil {
-				fmt.Printf("  ❌ Error extracting archives: %v / %v\n", err1, err2)
-				fmt.Println()
-				continue
-			}
-
-			fmt.Printf("  ✅ Archive 1: %d files\n", len(contents1))
-			fmt.Printf("  ✅ Archive 2: %d files\n", len(contents2))
-
-			// Compare STL files
-			fmt.Println("\n  🔬 Comparing STL contents:")
-			compareSTLContents(contents1, contents2, verbose)
-		}
-
-		fmt.Println()
-	}
-
-	fmt.Printf("📊 Analyzed %d similar file pairs\n", len(pairs))
 	return results
 }
 

@@ -33,8 +33,8 @@ func ExportPDF(report Report, filename string) error {
 	pdf.Cell(50, 8, "Identical Size Groups:")
 	pdf.Cell(140, 8, fmt.Sprintf("%d", len(report.SizeGroups)))
 	pdf.Ln(8)
-	pdf.Cell(50, 8, "Similar Name Pairs:")
-	pdf.Cell(140, 8, fmt.Sprintf("%d", len(report.SimilarPairs)))
+	pdf.Cell(50, 8, "Similar Groups:")
+	pdf.Cell(140, 8, fmt.Sprintf("%d", len(report.SimilarGroups)))
 	pdf.Ln(8)
 	pdf.Cell(50, 8, "Analysis Duration:")
 	pdf.Cell(140, 8, fmt.Sprintf("%.2fs", report.AnalysisDuration))
@@ -68,27 +68,27 @@ func ExportPDF(report Report, filename string) error {
 		pdf.Ln(10)
 	}
 
-	// Similar Name Pairs Section
-	if len(report.SimilarPairs) > 0 {
+	// Similar Name Groups Section
+	if len(report.SimilarGroups) > 0 {
 		pdf.SetFont("Arial", "B", 14)
 		pdf.SetFillColor(230, 230, 230)
-		pdf.CellFormat(190, 10, "Files with Similar Names", "1", 1, "L", true, 0, "")
+		pdf.CellFormat(190, 10, "Files with Similar Names (Clusters)", "1", 1, "L", true, 0, "")
 
-		for i, pair := range report.SimilarPairs {
+		for i, group := range report.SimilarGroups {
 			pdf.SetFont("Arial", "I", 11)
-			pdf.Cell(190, 8, fmt.Sprintf("Pair %d - Similarity: %.1f%%", i+1, pair.Similarity))
+			pdf.Cell(190, 8, fmt.Sprintf("Cluster %d - Base: '%s'", i+1, group.BaseName))
 			pdf.Ln(8)
 
 			pdf.SetFont("Arial", "", 10)
-			pdf.Cell(90, 6, pair.File1.Name)
-			pdf.Cell(10, 6, " <-> ")
-			pdf.Cell(90, 6, pair.File2.Name)
-			pdf.Ln(6)
-
-			pdf.SetTextColor(100, 100, 100)
-			pdf.Cell(190, 6, fmt.Sprintf("Sizes: %s vs %s", formatBytes(pair.File1.Size), formatBytes(pair.File2.Size)))
+			for _, file := range group.Files {
+				pdf.SetTextColor(0, 0, 0)
+				pdf.Cell(130, 6, file.Name)
+				pdf.SetTextColor(100, 100, 100)
+				pdf.Cell(50, 6, formatBytes(file.Size))
+				pdf.Ln(6)
+			}
 			pdf.SetTextColor(0, 0, 0)
-			pdf.Ln(8)
+			pdf.Ln(4)
 
 			if pdf.GetY() > 250 {
 				pdf.AddPage()

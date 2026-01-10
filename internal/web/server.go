@@ -20,21 +20,23 @@ import (
 
 // Server represents the web dashboard server
 type Server struct {
-	addr      string
-	report    *reporter.Report
-	trashPath string
-	leaveRef  bool
-	debug     bool
-	mu        sync.Mutex
+	addr         string
+	report       *reporter.Report
+	trashPath    string
+	leaveRef     bool
+	debug        bool
+	runStep3Func func()
+	mu           sync.Mutex
 }
 
 // NewServer creates a new web dashboard server
-func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool) *Server {
+func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func()) *Server {
 	return &Server{
-		addr:      fmt.Sprintf(":%d", port),
-		report:    report,
-		trashPath: trashPath,
-		leaveRef:  leaveRef,
+		addr:         fmt.Sprintf(":%d", port),
+		report:       report,
+		trashPath:    trashPath,
+		leaveRef:     leaveRef,
+		runStep3Func: runStep3Func,
 	}
 }
 
@@ -62,11 +64,19 @@ func (s *Server) Start() error {
 	// API Routes
 	api := app.Group("/api")
 
+	api.Post("/run-step-3", func(c *fiber.Ctx) error {
+		if s.runStep3Func != nil {
+			go s.runStep3Func()      // Run in background
+			return c.SendStatus(202) // Accepted
+		}
+		return c.Status(501).SendString("Step 3 runner not configured")
+	})
+
 	api.Get("/report", func(c *fiber.Ctx) error {
 		if c.Query("exclude_similar") == "true" {
-			// Create a copy without similar pairs
+			// Create a copy without similar groups
 			reportCopy := *s.report
-			reportCopy.SimilarPairs = nil
+			reportCopy.SimilarGroups = nil
 			return c.Status(200).JSON(reportCopy)
 		}
 		return c.Status(200).JSON(s.report)
@@ -76,7 +86,7 @@ func (s *Server) Start() error {
 		return c.Status(200).JSON(fiber.Map{
 			"totalFiles": s.report.TotalFiles,
 			"duplicates": len(s.report.SizeGroups),
-			"similar":    len(s.report.SimilarPairs),
+			"similar":    len(s.report.SimilarGroups),
 			"duration":   s.report.AnalysisDuration,
 		})
 	})
@@ -187,15 +197,23 @@ func (s *Server) Start() error {
 		// 2. Remove from report and update stats
 		s.report.TotalFiles--
 
-		// Remove from Similarity Pairs
-		newPairs := make([]reporter.SimilarPair, 0)
-		for _, p := range s.report.SimilarPairs {
-			if p.File1.Path != req.Path && p.File2.Path != req.Path {
-				newPairs = append(newPairs, p)
+		// Remove from Similarity Groups (Clusters)
+		newGroups := make([]reporter.SimilarityGroup, 0)
+		for _, g := range s.report.SimilarGroups {
+			newFiles := make([]reporter.FileInfo, 0)
+			for _, f := range g.Files {
+				if f.Path != req.Path {
+					newFiles = append(newFiles, f)
+				}
+			}
+			// Keep group if it still has at least 2 files
+			if len(newFiles) >= 2 {
+				g.Files = newFiles
+				newGroups = append(newGroups, g)
 			}
 		}
-		s.report.SimilarPairs = newPairs
-		s.report.SimilarCount = len(newPairs)
+		s.report.SimilarGroups = newGroups
+		s.report.SimilarCount = len(newGroups)
 
 		// Remove from Size Groups
 		var newSizeGroups []reporter.SizeGroup

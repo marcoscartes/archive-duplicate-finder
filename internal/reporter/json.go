@@ -8,13 +8,14 @@ import (
 
 // Report represents the analysis results
 type Report struct {
-	TotalFiles       int           `json:"total_files"`
-	SizeGroups       []SizeGroup   `json:"size_groups"`
-	SimilarPairs     []SimilarPair `json:"similar_pairs"`
-	SimilarCount     int           `json:"similar_count"`
-	AnalysisDuration float64       `json:"analysis_duration_seconds"`
-	Timestamp        string        `json:"timestamp"`
-	Status           string        `json:"status"` // "analyzing", "finished"
+	TotalFiles       int               `json:"total_files"`
+	SizeGroups       []SizeGroup       `json:"size_groups"`
+	SimilarGroups    []SimilarityGroup `json:"similar_groups"`
+	SimilarCount     int               `json:"similar_count"`
+	AnalysisDuration float64           `json:"analysis_duration_seconds"`
+	Timestamp        string            `json:"timestamp"`
+	Status           string            `json:"status"`   // "analyzing", "finished"
+	Progress         float64           `json:"progress"` // 0.0 to 100.0
 }
 
 // SizeGroup represents files with identical size
@@ -23,11 +24,10 @@ type SizeGroup struct {
 	Files []FileInfo `json:"files"`
 }
 
-// SimilarPair represents files with similar names
-type SimilarPair struct {
-	File1      FileInfo `json:"file1"`
-	File2      FileInfo `json:"file2"`
-	Similarity float64  `json:"similarity"`
+// SimilarityGroup represents a cluster of similar files
+type SimilarityGroup struct {
+	BaseName string     `json:"base_name"`
+	Files    []FileInfo `json:"files"`
 }
 
 // FileInfo represents basic file information
@@ -60,7 +60,7 @@ func PrintSummary(report Report) {
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("📦 Total files analyzed: %d\n", report.TotalFiles)
 	fmt.Printf("🔄 Size groups found: %d\n", len(report.SizeGroups))
-	fmt.Printf("📝 Similar name pairs: %d\n", len(report.SimilarPairs))
+	fmt.Printf("📝 Similar groups found: %d\n", len(report.SimilarGroups))
 	fmt.Printf("⏱️  Analysis duration: %.2fs\n", report.AnalysisDuration)
 	fmt.Println()
 }

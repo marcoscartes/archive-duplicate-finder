@@ -2,427 +2,168 @@ package similarity
 
 import (
 	"archive-duplicate-finder/internal/scanner"
-	"log"
-	"math"
-	"runtime"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
-	"unicode/utf8"
 )
 
-// SimilarPair represents a pair of files with similar names
-type SimilarPair struct {
-	File1      scanner.ArchiveFile
-	File2      scanner.ArchiveFile
-	Similarity float64
+// SimilarityGroup represents a cluster of files that share a similar canonical name
+type SimilarityGroup struct {
+	BaseName string
+	Files    []scanner.ArchiveFile
 }
 
-// NormalizedFile wraps an ArchiveFile with its pre-normalized name
-type NormalizedFile struct {
-	File           scanner.ArchiveFile
-	NormalizedName string
-}
-
-// FindSimilarNames finds pairs of files with similar names but different sizes using parallel processing
-func FindSimilarNames(files []scanner.ArchiveFile, threshold int, turbo bool, debug bool) []SimilarPair {
+// FindSimilarGroups uses an aggressive normalization strategy to cluster files efficiently (O(N))
+// instead of comparing every file with every other file (O(N^2)).
+// FindSimilarGroups uses an aggressive normalization strategy to cluster files efficiently (O(N))
+// instead of comparing every file with every other file (O(N^2)).
+func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, _ bool, onProgress func(float64)) []SimilarityGroup {
 	if len(files) < 2 {
 		return nil
 	}
 
-	// 1. Pre-normalize all names
-	normalized := make([]NormalizedFile, len(files))
+	// 1. Group by "Canonical Key"
+	// We map: CanonicalKey -> []ArchiveFile
+	grouped := make(map[string][]scanner.ArchiveFile)
+	var mu sync.Mutex
+
+	totalFiles := len(files)
+	batchSize := 1000 // Update progress every N files
+
+	// Parallelize the normalization step if N is huge, but usually simple loop is fine.
+	// For 70k files, a single thread map insert is ~50ms.
 	for i, f := range files {
-		normalized[i] = NormalizedFile{
-			File:           f,
-			NormalizedName: normalizeFilename(f.Name),
+		key := generateCanonicalKey(f.Name)
+		mu.Lock()
+		grouped[key] = append(grouped[key], f)
+		mu.Unlock()
+
+		if i%batchSize == 0 && onProgress != nil {
+			progress := (float64(i) / float64(totalFiles)) * 100
+			onProgress(progress)
 		}
 	}
 
-	// 2. Setup parallel processing
-	numWorkers := runtime.NumCPU()
-	if turbo {
-		numWorkers *= 2 // Over-subscribe for extreme concurrent throughput
-	}
-	var wg sync.WaitGroup
-	pairsChan := make(chan SimilarPair, 1000)
-
-	// Work distribution: Split the outer loop among workers
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-
-			// Each worker handles a subset of the outer loop
-			for i := workerID; i < len(normalized); i += numWorkers {
-				f1 := normalized[i]
-
-				for j := i + 1; j < len(normalized); j++ {
-					f2 := normalized[j]
-
-					// Skip if same size (likely handled by Step 2)
-					if f1.File.Size == f2.File.Size {
-						continue
-					}
-
-					// Skip if they are different parts of the same multi-volume set
-					is1, base1, p1 := f1.File.IsMultiVolumePart()
-					is2, base2, p2 := f2.File.IsMultiVolumePart()
-					if is1 && is2 && base1 == base2 && p1 != p2 {
-						continue
-					}
-
-					// Fast path: quick length check
-					len1 := utf8.RuneCountInString(f1.NormalizedName)
-					len2 := utf8.RuneCountInString(f2.NormalizedName)
-					if len1 > 0 && len2 > 0 {
-						ratio := float64(len1) / float64(len2)
-						if ratio < 0.4 || ratio > 2.5 {
-							continue
-						}
-					}
-
-					// Perform comparison
-					similarity := CalculateNormalizedSimilarity(f1.NormalizedName, f2.NormalizedName, debug)
-
-					if similarity >= float64(threshold) {
-						pairsChan <- SimilarPair{
-							File1:      f1.File,
-							File2:      f2.File,
-							Similarity: similarity,
-						}
-					}
-				}
-			}
-		}(w)
+	if onProgress != nil {
+		onProgress(90.0) // Generating keys done
 	}
 
-	// Collect results in a separate goroutine
-	resultsWg := sync.WaitGroup{}
-	var pairs []SimilarPair
-	resultsWg.Add(1)
-	go func() {
-		defer resultsWg.Done()
-		for p := range pairsChan {
-			pairs = append(pairs, p)
+	// 2. Filter groups
+	var results []SimilarityGroup
+
+	totalGroups := len(grouped)
+	processedGroups := 0
+
+	for key, group := range grouped {
+		processedGroups++
+		// Simple progress check for filtering phase
+		if processedGroups%100 == 0 && onProgress != nil {
+			// Map remaining 10% to filtering phase
+			baseProgress := 90.0
+			phaseProgress := (float64(processedGroups) / float64(totalGroups)) * 10.0
+			onProgress(baseProgress + phaseProgress)
 		}
-	}()
 
-	wg.Wait()
-	close(pairsChan)
-	resultsWg.Wait()
-
-	return pairs
-}
-
-// CalculateNormalizedSimilarity calculates similarity between two already normalized strings
-func CalculateNormalizedSimilarity(norm1, norm2 string, debug bool) float64 {
-	if norm1 == norm2 {
-		return 100.0
-	}
-
-	// Use multiple algorithms and average the results
-	lev := levenshteinSimilarity(norm1, norm2)
-	jaro := jaroWinklerSimilarity(norm1, norm2)
-	ngram := ngramSimilarity(norm1, norm2, 2)
-
-	// Weighted average (Levenshtein is most reliable for filenames)
-	similarity := (lev*0.5 + jaro*0.3 + ngram*0.2) * 100
-
-	if debug && (similarity > 50) {
-		log.Printf("DEBUG: %s ↔ %s | Lev: %.2f Jaro: %.2f NGram: %.2f | SUM: %.2f", norm1, norm2, lev, jaro, ngram, similarity)
-	}
-
-	return math.Round(similarity*10) / 10 // Round to 1 decimal
-}
-
-// CalculateNameSimilarity calculates similarity between two raw filenames
-func CalculateNameSimilarity(name1, name2 string, debug bool) float64 {
-	return CalculateNormalizedSimilarity(normalizeFilename(name1), normalizeFilename(name2), debug)
-}
-
-// normalizeFilename removes extension and converts to lowercase
-func normalizeFilename(filename string) string {
-	// Remove extension
-	name := filename
-	if idx := strings.LastIndex(filename, "."); idx != -1 {
-		name = filename[:idx]
-	}
-
-	// Convert to lowercase
-	name = strings.ToLower(name)
-
-	// Remove common version indicators
-	name = strings.ReplaceAll(name, "_", " ")
-	name = strings.ReplaceAll(name, "-", " ")
-
-	return strings.TrimSpace(name)
-}
-
-// levenshteinSimilarity calculates Levenshtein distance-based similarity
-func levenshteinSimilarity(s1, s2 string) float64 {
-	if s1 == s2 {
-		return 1.0
-	}
-	len1 := utf8.RuneCountInString(s1)
-	len2 := utf8.RuneCountInString(s2)
-
-	if len1 == 0 || len2 == 0 {
-		return 0.0
-	}
-
-	// Use Fast Bit-Parallel Myers Algorithm for strings < 64 chars
-	// (Most filenames fit here, making it extremely fast)
-	var distance int
-	if len1 <= 64 && len2 <= 64 {
-		distance = myersDistance(s1, s2)
-	} else {
-		distance = levenshteinDistance(s1, s2) // Fallback for very long names
-	}
-
-	maxLen := math.Max(float64(len1), float64(len2))
-	return 1.0 - (float64(distance) / maxLen)
-}
-
-// myersDistance calculates Levenshtein distance using bit-parallelism (extremely fast)
-func myersDistance(s1, s2 string) int {
-	r1 := []rune(s1)
-	r2 := []rune(s2)
-	n := len(r1)
-	m := len(r2)
-
-	if n > m {
-		r1, r2 = r2, r1
-		n, m = m, n
-	}
-
-	if n == 0 {
-		return m
-	}
-
-	// Precompute alphabet masks
-	peq := make(map[rune]uint64)
-	for i, char := range r1 {
-		peq[char] |= uint64(1) << uint64(i)
-	}
-
-	pv := ^uint64(0)
-	nv := uint64(0)
-	dist := n
-
-	for _, char := range r2 {
-		eq := peq[char]
-		xv := eq | nv
-		eq |= ((eq & pv) + pv) ^ pv
-		nv = pv & eq
-		pv = (nv << 1) | ^(xv | (pv << 1))
-		nv &= xv
-
-		if (eq>>uint64(n-1))&1 != 0 {
-			dist++
-		}
-		if (pv>>uint64(n-1))&1 != 0 {
-			dist--
-		}
-	}
-
-	return dist
-}
-
-// levenshteinDistance is the traditional matrix-based fallback
-func levenshteinDistance(s1, s2 string) int {
-	// ... (Existing matrix implementation for long strings)
-	r1 := []rune(s1)
-	r2 := []rune(s2)
-
-	len1 := len(r1)
-	len2 := len(r2)
-
-	// Create matrix
-	matrix := make([][]int, len1+1)
-	for i := range matrix {
-		matrix[i] = make([]int, len2+1)
-	}
-
-	// Initialize first row and column
-	for i := 0; i <= len1; i++ {
-		matrix[i][0] = i
-	}
-	for j := 0; j <= len2; j++ {
-		matrix[0][j] = j
-	}
-
-	// Fill matrix
-	for i := 1; i <= len1; i++ {
-		for j := 1; j <= len2; j++ {
-			cost := 1
-			if r1[i-1] == r2[j-1] {
-				cost = 0
-			}
-
-			matrix[i][j] = min(
-				matrix[i-1][j]+1,      // deletion
-				matrix[i][j-1]+1,      // insertion
-				matrix[i-1][j-1]+cost, // substitution
-			)
-		}
-	}
-
-	return matrix[len1][len2]
-}
-
-// jaroWinklerSimilarity calculates Jaro-Winkler similarity
-func jaroWinklerSimilarity(s1, s2 string) float64 {
-	jaro := jaroSimilarity(s1, s2)
-
-	// Calculate common prefix length (up to 4 characters)
-	prefixLen := 0
-	for i := 0; i < min(len(s1), len(s2), 4); i++ {
-		if s1[i] == s2[i] {
-			prefixLen++
-		} else {
-			break
-		}
-	}
-
-	// Jaro-Winkler formula
-	return jaro + (float64(prefixLen) * 0.1 * (1.0 - jaro))
-}
-
-// jaroSimilarity calculates Jaro similarity
-func jaroSimilarity(s1, s2 string) float64 {
-	if s1 == s2 {
-		return 1.0
-	}
-
-	len1 := len(s1)
-	len2 := len(s2)
-
-	if len1 == 0 || len2 == 0 {
-		return 0.0
-	}
-
-	// Maximum allowed distance
-	matchDistance := max(len1, len2)/2 - 1
-	if matchDistance < 0 {
-		matchDistance = 0
-	}
-
-	s1Matches := make([]bool, len1)
-	s2Matches := make([]bool, len2)
-
-	matches := 0
-	transpositions := 0
-
-	// Find matches
-	for i := 0; i < len1; i++ {
-		start := max(0, i-matchDistance)
-		end := min(i+matchDistance+1, len2)
-
-		for j := start; j < end; j++ {
-			if s2Matches[j] || s1[i] != s2[j] {
-				continue
-			}
-			s1Matches[i] = true
-			s2Matches[j] = true
-			matches++
-			break
-		}
-	}
-
-	if matches == 0 {
-		return 0.0
-	}
-
-	// Count transpositions
-	k := 0
-	for i := 0; i < len1; i++ {
-		if !s1Matches[i] {
+		if len(group) < 2 {
 			continue
 		}
-		for !s2Matches[k] {
-			k++
+
+		// Sort by name for consistency
+		sort.Slice(group, func(i, j int) bool {
+			return group[i].Name < group[j].Name
+		})
+
+		// Check if they are just multi-volume parts of the SAME archive
+		if areAllMultiVolumePartsOfSameSet(group) {
+			continue
 		}
-		if s1[i] != s2[k] {
-			transpositions++
-		}
-		k++
+
+		results = append(results, SimilarityGroup{
+			BaseName: key,
+			Files:    group,
+		})
 	}
 
-	// Jaro formula
-	return (float64(matches)/float64(len1) +
-		float64(matches)/float64(len2) +
-		float64(matches-transpositions/2)/float64(matches)) / 3.0
+	if onProgress != nil {
+		onProgress(100.0)
+	}
+
+	// Sort results by group size (descending) to show biggest clusters first
+	sort.Slice(results, func(i, j int) bool {
+		return len(results[i].Files) > len(results[j].Files)
+	})
+
+	return results
 }
 
-// ngramSimilarity calculates n-gram based similarity
-func ngramSimilarity(s1, s2 string, n int) float64 {
-	ngrams1 := getNgrams(s1, n)
-	ngrams2 := getNgrams(s2, n)
+// generateCanonicalKey reduces a filename to its "essence" to find matches.
+func generateCanonicalKey(name string) string {
+	// 1. Lowercase
+	s := strings.ToLower(name)
 
-	if len(ngrams1) == 0 && len(ngrams2) == 0 {
-		return 1.0
+	// 2. Remove extension
+	if idx := strings.LastIndex(s, "."); idx != -1 {
+		s = s[:idx]
 	}
 
-	if len(ngrams1) == 0 || len(ngrams2) == 0 {
-		return 0.0
-	}
+	// 3. Replace common separators with space
+	s = strings.ReplaceAll(s, "_", " ")
+	s = strings.ReplaceAll(s, "-", " ")
+	s = strings.ReplaceAll(s, ".", " ")
+	s = strings.ReplaceAll(s, "+", " ")
+	s = strings.ReplaceAll(s, "[", " ")
+	s = strings.ReplaceAll(s, "]", " ")
+	s = strings.ReplaceAll(s, "(", " ")
+	s = strings.ReplaceAll(s, ")", " ")
 
-	// Count common n-grams
-	common := 0
-	for ng := range ngrams1 {
-		if ngrams2[ng] {
-			common++
+	// 4. Remove common "noise" words using Regex
+	// We want to remove version numbers (v1, 1.0, etc), "copy", "backup", date stamps somewhat.
+	// Regex: Remove "v" followed by digits
+	reVersion := regexp.MustCompile(`\bv\d+(\.\d+)*\b`)
+	s = reVersion.ReplaceAllString(s, "")
+
+	// Remove isolated numbers
+	reNumbers := regexp.MustCompile(`\b\d+\b`)
+	s = reNumbers.ReplaceAllString(s, "")
+
+	// Remove specific keywords
+	keywords := []string{"copy", "backup", "old", "new", "final", "temp", "tmp", "archive", "rar", "zip"}
+	words := strings.Fields(s)
+	var cleanWords []string
+
+	for _, w := range words {
+		isKeyword := false
+		for _, k := range keywords {
+			if w == k {
+				isKeyword = true
+				break
+			}
+		}
+		if !isKeyword {
+			cleanWords = append(cleanWords, w)
 		}
 	}
 
-	// Jaccard similarity
-	total := len(ngrams1) + len(ngrams2) - common
-	if total == 0 {
-		return 0.0
-	}
-
-	return float64(common) / float64(total)
+	return strings.Join(cleanWords, " ")
 }
 
-// getNgrams generates n-grams from a string
-func getNgrams(s string, n int) map[string]bool {
-	ngrams := make(map[string]bool)
-
-	if len(s) < n {
-		ngrams[s] = true
-		return ngrams
-	}
-
-	for i := 0; i <= len(s)-n; i++ {
-		ngrams[s[i:i+n]] = true
-	}
-
-	return ngrams
-}
-
-// Helper functions
-func min(values ...int) int {
-	if len(values) == 0 {
-		return 0
-	}
-	m := values[0]
-	for _, v := range values[1:] {
-		if v < m {
-			m = v
+func areAllMultiVolumePartsOfSameSet(files []scanner.ArchiveFile) bool {
+	countPart := 0
+	for _, f := range files {
+		lower := strings.ToLower(f.Name)
+		if strings.Contains(lower, ".part") || strings.Contains(lower, ".z0") || strings.Contains(lower, ".00") {
+			countPart++
 		}
 	}
-	return m
+	// If more than 50% are 'parts', it's likely a split archive
+	return countPart > 1 && countPart == len(files)
 }
 
-func max(values ...int) int {
-	if len(values) == 0 {
-		return 0
+// CalculateNameSimilarity is kept for compatibility if needed elsewhere
+func CalculateNameSimilarity(name1, name2 string, debug bool) float64 {
+	if generateCanonicalKey(name1) == generateCanonicalKey(name2) {
+		return 100
 	}
-	m := values[0]
-	for _, v := range values[1:] {
-		if v > m {
-			m = v
-		}
-	}
-	return m
+	return 0
 }

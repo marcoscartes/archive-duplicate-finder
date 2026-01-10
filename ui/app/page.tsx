@@ -34,18 +34,18 @@ interface SizeGroup {
   files: FileInfo[]
 }
 
-interface SimilarPair {
-  file1: FileInfo
-  file2: FileInfo
-  similarity: number
+interface SimilarityGroup {
+  base_name: string
+  files: FileInfo[]
 }
 
 interface Report {
   total_files: number
   size_groups: SizeGroup[]
-  similar_pairs: SimilarPair[]
+  similar_groups: SimilarityGroup[]
   analysis_duration_seconds: number
   status?: string
+  progress?: number
 }
 
 function PreviewImage({ path }: { path: string }) {
@@ -209,7 +209,7 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            className="absolute left-0 bottom-full mb-3 w-64 z-[100] pointer-events-none"
+            className="absolute left-0 bottom-full mb-3 w-96 z-[100] pointer-events-none"
           >
             <div className="glass-card p-2 rounded-2xl shadow-2xl border border-blue-500/30">
               <PreviewImage path={file.path} />
@@ -269,7 +269,7 @@ export default function Dashboard() {
       console.log("📊 Data received:", {
         files: report.total_files,
         sizeGroups: report.size_groups?.length || 0,
-        similarPairs: report.similar_pairs?.length || 0
+        similarGroups: report.similar_groups?.length || 0
       })
 
       setData(report)
@@ -277,7 +277,7 @@ export default function Dashboard() {
       if (report.status === 'finished' && status === 'analyzing' && !notified) {
         if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
           new Notification('🔍 Analysis Complete!', {
-            body: `Found ${report.similar_pairs?.length || 0} similar file pairs.`,
+            body: `Found ${report.similar_groups?.length || 0} similar file clusters.`,
             icon: '/favicon.ico'
           })
         }
@@ -313,29 +313,29 @@ export default function Dashboard() {
     }) || []
   }, [data?.size_groups, searchQuery, fileType])
 
-  const filteredSimilarPairs = useMemo(() => {
-    if (!data?.similar_pairs) return []
+  const filteredSimilarGroups = useMemo(() => {
+    if (!data?.similar_groups) return []
     const query = searchQuery.toLowerCase()
-    const type = fileType.toLowerCase()
 
-    // Performance optimization: limit scanning to first 10k pairs if no filter is active
-    // This prevents browser UI lag with massive datasets (>25k pairs)
+    // Performance optimization: limit rendering if list is huge
     const list = searchQuery === '' && fileType === 'all'
-      ? data.similar_pairs.slice(0, 10000)
-      : data.similar_pairs
+      ? data.similar_groups.slice(0, 5000)
+      : data.similar_groups
 
-    return list.filter(pair => {
-      const name1 = (pair?.file1?.name || '').toLowerCase()
-      const name2 = (pair?.file2?.name || '').toLowerCase()
-      const matchesSearch = name1.includes(query) || name2.includes(query)
-      const matchesType = fileType === 'all' || name1.endsWith(`.${type}`) || name2.endsWith(`.${type}`)
-      return matchesSearch && matchesType
+    return list.filter(group => {
+      // Check if ANY file in the group matches
+      return group.files.some(f => {
+        const name = (f?.name || '').toLowerCase()
+        const matchesSearch = name.includes(query)
+        const matchesType = fileType === 'all' || name.endsWith(`.${fileType.toLowerCase()}`)
+        return matchesSearch && matchesType
+      })
     }) || []
-  }, [data?.similar_pairs, searchQuery, fileType])
+  }, [data?.similar_groups, searchQuery, fileType])
 
   const currentItems = useMemo(() =>
-    viewMode === 'size' ? (filteredSizeGroups || []) : (filteredSimilarPairs || [])
-    , [viewMode, filteredSizeGroups, filteredSimilarPairs])
+    viewMode === 'size' ? (filteredSizeGroups || []) : (filteredSimilarGroups || [])
+    , [viewMode, filteredSizeGroups, filteredSimilarGroups])
 
   const paginatedItems = useMemo(() =>
     currentItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
@@ -354,6 +354,18 @@ export default function Dashboard() {
   useEffect(() => {
     setCurrentPage(1)
   }, [searchQuery, fileType, viewMode, itemsPerPage])
+
+  const handleRunStep3 = async () => {
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    try {
+      await fetch(`${apiHost}/api/run-step-3`, { method: 'POST' })
+      // Trigger a status update manually or let the poller catch it
+      setStatus('analyzing')
+    } catch (err) {
+      console.error("Failed to run Step 3:", err)
+      alert("Error triggering Step 3")
+    }
+  }
 
   if (!mounted || loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white">
@@ -384,7 +396,7 @@ export default function Dashboard() {
   const stats = [
     { label: 'Total Files', value: data?.total_files || 0, icon: Box, color: 'text-blue-400' },
     { label: 'Size Groups', value: data?.size_groups?.length || 0, icon: Layers, color: 'text-purple-400' },
-    { label: 'Similar Names', value: data?.similar_pairs?.length || 0, icon: FileText, color: 'text-cyan-400' },
+    { label: 'Similar Clusters', value: data?.similar_groups?.length || 0, icon: FileText, color: 'text-cyan-400' },
     { label: 'Scan Time', value: `${data?.analysis_duration_seconds?.toFixed(2) || 0}s`, icon: Clock, color: 'text-green-400' },
   ]
 
@@ -561,33 +573,29 @@ export default function Dashboard() {
                   </motion.div>
                 ))
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {(paginatedItems as SimilarPair[]).map((pair, i) => (
-                    <div key={i} className="glass-card p-5 rounded-2xl relative overflow-hidden h-fit">
-                      <div className="flex flex-col gap-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${pair.similarity > 90 ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.5)]' : 'bg-yellow-500'}`} />
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                              Match: {pair.similarity.toFixed(1)}%
-                            </span>
-                          </div>
-                          <AlertTriangle className={`w-4 h-4 ${pair.similarity > 90 ? 'text-orange-500' : 'text-yellow-500'} opacity-60`} />
-                        </div>
-
-                        <div className="space-y-3 mt-2">
-                          <FileItem key={pair.file1.path} file={pair.file1} onRefresh={fetchData} />
-                          <div className="flex justify-center -my-2 relative z-10">
-                            <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center scale-90 shadow-lg shadow-blue-500/20">
-                              <Search className="w-3 h-3 text-white" />
-                            </div>
-                          </div>
-                          <FileItem key={pair.file2.path} file={pair.file2} onRefresh={fetchData} />
-                        </div>
-                      </div>
+                (paginatedItems as SimilarityGroup[]).map((group, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="glass-card p-4 rounded-2xl border border-white/5 hover:border-cyan-500/30 transition-all bg-gradient-to-r from-cyan-900/10 to-transparent"
+                  >
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-[10px] font-black text-cyan-500/60 uppercase tracking-widest truncate max-w-[70%]">
+                        Cluster: {group.base_name || "Unknown"}
+                      </span>
+                      <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
+                        {group.files.length} Files
+                      </span>
                     </div>
-                  ))}
-                </div>
+                    <div className="space-y-2">
+                      {/* Sort by size descending within group for better visibility */}
+                      {[...group.files].sort((a, b) => b.size - a.size).map((file) => (
+                        <FileItem key={file.path} file={file} onRefresh={fetchData} />
+                      ))}
+                    </div>
+                  </motion.div>
+                ))
               )}
 
               {currentItems.length === 0 && (
@@ -675,6 +683,29 @@ export default function Dashboard() {
               <button className="w-full py-4 glass-card border-white/10 hover:border-blue-500/40 text-gray-400 hover:text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3">
                 <ExternalLink className="w-4 h-4" />
                 Browse Directory
+              </button>
+
+              <button
+                onClick={handleRunStep3}
+                disabled={data?.status === 'analyzing_step3'}
+                className="w-full py-4 glass-card border-white/10 hover:border-cyan-500/40 text-gray-400 hover:text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {data?.status === 'analyzing_step3' ? (
+                  <div className="flex flex-col items-center w-full px-4">
+                    <span className="mb-2">Scanning... {(data.progress || 0).toFixed(0)}%</span>
+                    <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-cyan-500 transition-all duration-300 ease-out"
+                        style={{ width: `${data.progress || 0}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <FileText className="w-4 h-4 text-cyan-500" />
+                    Run Similarity Analysis
+                  </>
+                )}
               </button>
             </div>
 

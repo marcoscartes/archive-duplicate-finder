@@ -70,22 +70,22 @@ func (c *Cache) CalculateFingerprint(files []scanner.ArchiveFile) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func (c *Cache) GetSimilarities(fingerprint string) ([]reporter.SimilarPair, bool) {
+func (c *Cache) GetSimilarities(fingerprint string) ([]reporter.SimilarityGroup, bool) {
 	var jsonStr string
 	err := c.db.QueryRow("SELECT results_json FROM scan_cache WHERE fingerprint = ?", fingerprint).Scan(&jsonStr)
 	if err != nil {
 		return nil, false
 	}
 
-	var pairs []reporter.SimilarPair
-	if err := json.Unmarshal([]byte(jsonStr), &pairs); err != nil {
+	var groups []reporter.SimilarityGroup
+	if err := json.Unmarshal([]byte(jsonStr), &groups); err != nil {
 		return nil, false
 	}
-	return pairs, true
+	return groups, true
 }
 
-func (c *Cache) PutSimilarities(fingerprint string, pairs []reporter.SimilarPair) {
-	data, err := json.Marshal(pairs)
+func (c *Cache) PutSimilarities(fingerprint string, groups []reporter.SimilarityGroup) {
+	data, err := json.Marshal(groups)
 	if err != nil {
 		return
 	}
