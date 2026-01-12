@@ -40,6 +40,8 @@ type Config struct {
 	GPUTurbo    bool   // Experimental high-performance mode
 	Debug       bool   // Enable detailed debug logging
 	RunStep3    bool   // Explicitly run Step 3 (Similarity Check)
+	Version     bool   // Show version and exit
+	Info        bool   // Show author and info and exit
 }
 
 func main() {
@@ -302,8 +304,26 @@ func parseFlags() Config {
 	flag.BoolVar(&config.GPUTurbo, "gpu", false, "Enable experimental GPU/Turbo acceleration (Bit-Parallel Engine)")
 	flag.BoolVar(&config.Debug, "debug", false, "Enable detailed debug logging for troubleshooting")
 	flag.BoolVar(&config.RunStep3, "check-similar", false, "Explicitly run Step 3 (Similarity Check). Default is on-demand.")
+	flag.BoolVar(&config.Version, "version", false, "Show version information and exit")
+	flag.BoolVar(&config.Info, "info", false, "Show project information, author and license")
 
 	flag.Parse()
+
+	if config.Version {
+		fmt.Println("Archive Duplicate Finder v1.7.0")
+		os.Exit(0)
+	}
+
+	if config.Info {
+		fmt.Println("📦 Archive Duplicate Finder")
+		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		fmt.Println("👤 Author: Marcos Cartes")
+		fmt.Println("🤖 Co-Author: Antigravity (Google Deepmind AI)")
+		fmt.Println("🌐 GitHub: https://github.com/marcoscartes/archive-duplicate-finder")
+		fmt.Println("📄 License: MIT")
+		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		os.Exit(0)
+	}
 
 	// Validate threshold
 	if config.Threshold < 0 || config.Threshold > 100 {
