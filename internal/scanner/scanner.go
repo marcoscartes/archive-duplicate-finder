@@ -124,6 +124,10 @@ func getArchiveType(filename string) string {
 		return "rar"
 	case ".7z":
 		return "7z"
+	case ".stl":
+		return "stl"
+	case ".obj":
+		return "obj"
 	default:
 		return ""
 	}

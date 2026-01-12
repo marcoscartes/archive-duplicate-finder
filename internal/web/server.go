@@ -91,25 +91,76 @@ func (s *Server) Start() error {
 		})
 	})
 
+	api.Get("/all-files", func(c *fiber.Ctx) error {
+		// Collect all unique files from both size groups and similar groups
+		fileMap := make(map[string]reporter.FileInfo)
+
+		// Add files from size groups
+		for _, group := range s.report.SizeGroups {
+			for _, file := range group.Files {
+				fileMap[file.Path] = file
+			}
+		}
+
+		// Add files from similar groups
+		for _, group := range s.report.SimilarGroups {
+			for _, file := range group.Files {
+				fileMap[file.Path] = file
+			}
+		}
+
+		// Convert map to slice
+		allFiles := make([]reporter.FileInfo, 0, len(fileMap))
+		for _, file := range fileMap {
+			allFiles = append(allFiles, file)
+		}
+
+		return c.Status(200).JSON(fiber.Map{
+			"files": allFiles,
+			"total": len(allFiles),
+		})
+	})
+
 	api.Get("/preview", func(c *fiber.Ctx) error {
 		path := c.Query("path")
 		if path == "" {
 			return c.Status(400).SendString("Path is required")
 		}
 
-		data, filename, err := archive.FindFirstImageInArchive(path)
+		// Check if it's a direct STL/OBJ file
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == ".stl" || ext == ".obj" {
+			// Serve the file directly
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return c.Status(404).SendString(err.Error())
+			}
+			contentType := "model/stl"
+			if ext == ".obj" {
+				contentType = "model/obj"
+			}
+			c.Set("Content-Type", contentType)
+			return c.Send(data)
+		}
+
+		// Otherwise, try to extract preview from archive
+		data, filename, err := archive.FindPreviewInArchive(path)
 		if err != nil {
 			return c.Status(404).SendString(err.Error())
 		}
 
 		// Set content type based on extension
-		ext := strings.ToLower(filepath.Ext(filename))
+		fileExt := strings.ToLower(filepath.Ext(filename))
 		contentType := "image/jpeg"
-		switch ext {
+		switch fileExt {
 		case ".png":
 			contentType = "image/png"
 		case ".webp":
 			contentType = "image/webp"
+		case ".stl":
+			contentType = "model/stl"
+		case ".obj":
+			contentType = "model/obj"
 		}
 
 		c.Set("Content-Type", contentType)

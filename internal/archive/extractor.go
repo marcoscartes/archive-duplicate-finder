@@ -52,6 +52,118 @@ func FindLargestImageInArchive(archivePath string) ([]byte, string, error) {
 	}
 }
 
+// FindPreviewInArchive returns preview content from archive:
+// 1. First tries to find the largest JPG image
+// 2. If no images found, looks for STL files containing keywords: "full", "whole", "body", "complete"
+func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
+	// Try to find largest image first
+	data, filename, err := FindLargestImageInArchive(archivePath)
+	if err == nil {
+		return data, filename, nil
+	}
+
+	// No image found, try to find STL with keywords
+	ext := strings.ToLower(filepath.Ext(archivePath))
+
+	switch ext {
+	case ".zip":
+		return findKeywordSTLZIP(archivePath)
+	case ".rar":
+		return findKeywordSTLRAR(archivePath)
+	case ".7z":
+		return findKeywordSTL7Z(archivePath)
+	default:
+		return nil, "", fmt.Errorf("no preview found in archive")
+	}
+}
+
+func isSTLFile(filename string) bool {
+	return strings.ToLower(filepath.Ext(filename)) == ".stl"
+}
+
+func hasKeyword(filename string) bool {
+	lower := strings.ToLower(filename)
+	keywords := []string{"full", "whole", "body", "complete"}
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func findKeywordSTLZIP(archivePath string) ([]byte, string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && isSTLFile(file.Name) && hasKeyword(file.Name) {
+			rc, err := file.Open()
+			if err != nil {
+				continue
+			}
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil && len(data) > 0 {
+				return data, file.Name, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no STL with keywords found")
+}
+
+func findKeywordSTLRAR(archivePath string) ([]byte, string, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+
+		if !header.IsDir && isSTLFile(header.Name) && hasKeyword(header.Name) {
+			data, err := io.ReadAll(reader)
+			if err == nil && len(data) > 0 {
+				return data, header.Name, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no STL with keywords found")
+}
+
+func findKeywordSTL7Z(archivePath string) ([]byte, string, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && isSTLFile(file.Name) && hasKeyword(file.Name) {
+			rc, err := file.Open()
+			if err != nil {
+				continue
+			}
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil && len(data) > 0 {
+				return data, file.Name, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no STL with keywords found")
+}
+
 func isImageFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
