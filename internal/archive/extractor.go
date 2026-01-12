@@ -58,7 +58,7 @@ func ListPreviewsInArchive(archivePath string) ([]PreviewInfo, error) {
 
 	var previews []PreviewInfo
 	for _, f := range files {
-		if isImageFile(f.Path) || isSTLFile(f.Path) {
+		if isImageFile(f.Path) || isSTLFile(f.Path) || isVideoFile(f.Path) {
 			previews = append(previews, f)
 		}
 	}
@@ -90,8 +90,9 @@ func FindLargestImageInArchive(archivePath string) ([]byte, string, error) {
 
 // FindPreviewInArchive returns preview content from archive:
 // 1. First tries to find the largest JPG/PNG image
-// 2. If no images found, looks for STL files containing keywords: "full", "whole", "body", "complete"
-// 3. Fallback: finds the largest STL file if no keywords match
+// 2. If no images, looks for the largest MP4/WebM video
+// 3. If no videos, looks for STL files containing keywords: "full", "whole", "body", "complete"
+// 4. Fallback: finds the largest STL file if no keywords match
 func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
 	// Try to find largest image first
 	data, filename, err := FindLargestImageInArchive(archivePath)
@@ -99,7 +100,13 @@ func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
 		return data, filename, nil
 	}
 
-	// No image found, try to find STL with keywords
+	// No image, try to find largest video
+	data, filename, err = FindLargestVideoInArchive(archivePath)
+	if err == nil {
+		return data, filename, nil
+	}
+
+	// No video found, try to find STL with keywords
 	ext := strings.ToLower(filepath.Ext(archivePath))
 
 	var stlData []byte
@@ -131,6 +138,65 @@ func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
 	}
 
 	return nil, "", fmt.Errorf("no preview found in archive")
+}
+
+// FindPreviewPathInArchive returns the internal path of the best preview candidate
+func FindPreviewPathInArchive(archivePath string) (string, error) {
+	previews, err := ListPreviewsInArchive(archivePath)
+	if err != nil {
+		return "", err
+	}
+	if len(previews) == 0 {
+		return "", fmt.Errorf("no preview found")
+	}
+
+	// 1. Find largest image
+	var bestImage string
+	var maxImgSize int64
+	for _, f := range previews {
+		if isImageFile(f.Path) && f.Size > maxImgSize {
+			bestImage = f.Path
+			maxImgSize = f.Size
+		}
+	}
+	if bestImage != "" {
+		return bestImage, nil
+	}
+
+	// 2. Find largest video
+	var bestVideo string
+	var maxVidSize int64
+	for _, f := range previews {
+		if isVideoFile(f.Path) && f.Size > maxVidSize {
+			bestVideo = f.Path
+			maxVidSize = f.Size
+		}
+	}
+	if bestVideo != "" {
+		return bestVideo, nil
+	}
+
+	// 3. Find STL with keywords
+	for _, f := range previews {
+		if isSTLFile(f.Path) && hasKeyword(f.Path) {
+			return f.Path, nil
+		}
+	}
+
+	// 4. Find largest STL
+	var bestSTL string
+	var maxSTLSize int64
+	for _, f := range previews {
+		if isSTLFile(f.Path) && f.Size > maxSTLSize {
+			bestSTL = f.Path
+			maxSTLSize = f.Size
+		}
+	}
+	if bestSTL != "" {
+		return bestSTL, nil
+	}
+
+	return "", fmt.Errorf("no preview found")
 }
 
 func isSTLFile(filename string) bool {
@@ -340,11 +406,144 @@ func findLargestSTL7Z(archivePath string) ([]byte, string, error) {
 
 func isImageFile(filename string) bool {
 	lower := strings.ToLower(filename)
-	if strings.Contains(lower, "__macosx") || strings.Contains(lower, "@eaDir") {
+	if strings.Contains(lower, "__macosx") || strings.Contains(lower, "@eadir") {
 		return false
 	}
 	ext := filepath.Ext(lower)
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
+}
+
+func isVideoFile(filename string) bool {
+	lower := strings.ToLower(filename)
+	if strings.Contains(lower, "__macosx") || strings.Contains(lower, "@eadir") {
+		return false
+	}
+	ext := filepath.Ext(lower)
+	return ext == ".mp4" || ext == ".webm" || ext == ".mkv" || ext == ".mov" || ext == ".avi"
+}
+
+// FindLargestVideoInArchive returns the contents of the largest video file in the archive
+func FindLargestVideoInArchive(archivePath string) ([]byte, string, error) {
+	ext := strings.ToLower(filepath.Ext(archivePath))
+
+	switch ext {
+	case ".zip":
+		return findLargestFileWithFilter(archivePath, isVideoFile)
+	case ".rar":
+		return findLargestFileWithFilterRAR(archivePath, isVideoFile)
+	case ".7z":
+		return findLargestFileWithFilter7Z(archivePath, isVideoFile)
+	default:
+		return nil, "", fmt.Errorf("unsupported archive format: %s", ext)
+	}
+}
+
+func findLargestFileWithFilter(archivePath string, filter func(string) bool) ([]byte, string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize int64
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && filter(file.Name) {
+			if file.UncompressedSize64 > uint64(largestSize) {
+				rc, err := file.Open()
+				if err != nil {
+					continue
+				}
+				data, err := io.ReadAll(rc)
+				rc.Close()
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = file.Name
+					largestSize = int64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no matching file found")
+	}
+	return largestData, largestName, nil
+}
+
+func findLargestFileWithFilterRAR(archivePath string, filter func(string) bool) ([]byte, string, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize int64
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+
+		if !header.IsDir && filter(header.Name) {
+			if header.UnPackedSize > largestSize {
+				data, err := io.ReadAll(reader)
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = header.Name
+					largestSize = int64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no matching file found")
+	}
+	return largestData, largestName, nil
+}
+
+func findLargestFileWithFilter7Z(archivePath string, filter func(string) bool) ([]byte, string, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize int64
+
+	for _, file := range reader.File {
+		if !file.FileInfo().IsDir() && filter(file.Name) {
+			if int64(file.UncompressedSize) > largestSize {
+				rc, err := file.Open()
+				if err != nil {
+					continue
+				}
+				data, err := io.ReadAll(rc)
+				rc.Close()
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = file.Name
+					largestSize = int64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no matching file found")
+	}
+	return largestData, largestName, nil
 }
 
 func findLargestImageZIP(archivePath string) ([]byte, string, error) {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"archive-duplicate-finder/internal/archive"
+	"archive-duplicate-finder/internal/db"
 	"archive-duplicate-finder/internal/reporter"
 	"fmt"
 	"log"
@@ -27,11 +28,12 @@ type Server struct {
 	debug        bool
 	runStep3Func func()
 	allFiles     []reporter.FileInfo
+	cache        *db.Cache
 	mu           sync.Mutex
 }
 
 // NewServer creates a new web dashboard server
-func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), allFiles []reporter.FileInfo) *Server {
+func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), allFiles []reporter.FileInfo, cache *db.Cache) *Server {
 	return &Server{
 		addr:         fmt.Sprintf(":%d", port),
 		report:       report,
@@ -39,6 +41,7 @@ func NewServer(port int, report *reporter.Report, trashPath string, leaveRef boo
 		leaveRef:     leaveRef,
 		runStep3Func: runStep3Func,
 		allFiles:     allFiles,
+		cache:        cache,
 	}
 }
 
@@ -122,6 +125,7 @@ func (s *Server) Start() error {
 		})
 	})
 
+	// Endpoint: /api/preview?path=...&internal_path=...
 	api.Get("/preview", func(c *fiber.Ctx) error {
 		path := c.Query("path")
 		internalPath := c.Query("internal_path")
@@ -129,58 +133,79 @@ func (s *Server) Start() error {
 			return c.Status(400).SendString("Path is required")
 		}
 
-		// Check if it's a direct STL/OBJ file
+		// Determine if it's a direct file or an archive
+		isArchive := false
 		ext := strings.ToLower(filepath.Ext(path))
-		if internalPath == "" && (ext == ".stl" || ext == ".obj") {
-			// Serve the file directly
-			data, err := os.ReadFile(path)
+		if ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || ext == ".gz" {
+			isArchive = true
+		}
+
+		// 1. Handling when internalPath is NOT specified (Initial Gallery Load)
+		if internalPath == "" {
+			if !isArchive {
+				// Direct file (image, video, model): Send with correct content type
+				contentType := getContentType(path)
+				c.Set("Content-Type", contentType)
+				return c.SendFile(path)
+			}
+
+			// Check cache first
+			info, _ := os.Stat(path)
+			modTime := ""
+			if info != nil {
+				modTime = info.ModTime().String()
+			}
+
+			var found bool
+			if s.cache != nil {
+				internalPath, found = s.cache.GetPreviewPath(path, modTime)
+			}
+
+			if !found {
+				// Archive without internal path: Find the best preview filename efficiently
+				filename, err := archive.FindPreviewPathInArchive(path)
+				if err != nil {
+					return c.Status(404).SendString(err.Error())
+				}
+				internalPath = filename
+
+				// Save to cache
+				if s.cache != nil {
+					s.cache.PutPreviewPath(path, internalPath, modTime)
+				}
+			}
+		}
+
+		// 2. Files inside archives (or found video preview from above)
+		fileExt := strings.ToLower(filepath.Ext(internalPath))
+
+		// For images, models or videos inside archives, use disk cache
+		tempDir := filepath.Join(os.TempDir(), "archive-finder-cache")
+		os.MkdirAll(tempDir, 0755)
+
+		// Create a unique hash/filename for this specific file in the archive
+		cacheKey := fmt.Sprintf("%x_%s", path, internalPath)
+		cacheKey = strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return '_'
+		}, cacheKey)
+
+		cachePath := filepath.Join(tempDir, cacheKey+fileExt)
+
+		// If not cached, extract it
+		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+			data, err := archive.GetFileFromArchive(path, internalPath)
 			if err != nil {
 				return c.Status(404).SendString(err.Error())
 			}
-			contentType := "model/stl"
-			if ext == ".obj" {
-				contentType = "model/obj"
-			}
-			c.Set("Content-Type", contentType)
-			return c.Send(data)
+			os.WriteFile(cachePath, data, 0644)
 		}
 
-		var data []byte
-		var filename string
-		var err error
-
-		if internalPath != "" {
-			// Fetch specific file from archive
-			data, err = archive.GetFileFromArchive(path, internalPath)
-			if err != nil {
-				return c.Status(404).SendString(err.Error())
-			}
-			filename = internalPath
-		} else {
-			// Otherwise, try to extract default (largest) preview from archive
-			data, filename, err = archive.FindPreviewInArchive(path)
-			if err != nil {
-				return c.Status(404).SendString(err.Error())
-			}
-		}
-
-		// Set content type based on extension
-		fileExt := strings.ToLower(filepath.Ext(filename))
-		contentType := "image/jpeg"
-		switch fileExt {
-		case ".png":
-			contentType = "image/png"
-		case ".webp":
-			contentType = "image/webp"
-		case ".stl":
-			contentType = "model/stl"
-		case ".obj":
-			contentType = "model/obj"
-		}
-
-		c.Set("Content-Type", contentType)
-		c.Set("X-Internal-Path", filename) // Let the client know which file was selected
-		return c.Send(data)
+		c.Set("X-Internal-Path", internalPath)
+		c.Set("Content-Type", getContentType(internalPath))
+		return c.SendFile(cachePath)
 	})
 
 	api.Get("/list-previews", func(c *fiber.Ctx) error {
@@ -339,4 +364,32 @@ func (s *Server) Start() error {
 
 	log.Printf("🚀 Web Dashboard available at: http://localhost%s", s.addr)
 	return app.Listen(s.addr)
+}
+
+func getContentType(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".stl":
+		return "model/stl"
+	case ".obj":
+		return "model/obj"
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".mov":
+		return "video/quicktime"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	default:
+		return "application/octet-stream"
+	}
 }

@@ -41,6 +41,11 @@ func NewCache() (*Cache, error) {
 			fingerprint TEXT PRIMARY KEY,
 			results_json TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS preview_cache (
+			path TEXT PRIMARY KEY,
+			internal_path TEXT,
+			mod_time TEXT
+		)`,
 	}
 
 	for _, q := range queries {
@@ -90,4 +95,18 @@ func (c *Cache) PutSimilarities(fingerprint string, groups []reporter.Similarity
 		return
 	}
 	_, _ = c.db.Exec("INSERT OR REPLACE INTO scan_cache (fingerprint, results_json) VALUES (?, ?)", fingerprint, string(data))
+}
+
+func (c *Cache) GetPreviewPath(path string, modTime string) (string, bool) {
+	var internalPath string
+	var cachedModTime string
+	err := c.db.QueryRow("SELECT internal_path, mod_time FROM preview_cache WHERE path = ?", path).Scan(&internalPath, &cachedModTime)
+	if err != nil || cachedModTime != modTime {
+		return "", false
+	}
+	return internalPath, true
+}
+
+func (c *Cache) PutPreviewPath(path string, internalPath string, modTime string) {
+	_, _ = c.db.Exec("INSERT OR REPLACE INTO preview_cache (path, internal_path, mod_time) VALUES (?, ?, ?)", path, internalPath, modTime)
 }

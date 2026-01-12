@@ -23,7 +23,8 @@ import {
     ArrowDown01,
     Clock,
     Filter,
-    ArrowDownWideNarrow
+    ArrowDownWideNarrow,
+    Play
 } from 'lucide-react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -53,7 +54,7 @@ function formatBytes(bytes: number): string {
 }
 
 function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, index: number, onRefresh?: () => void, onSelect: (index: number) => void }) {
-    const [previewData, setPreviewData] = useState<{ url: string, type: 'image' | 'model' } | null>(null)
+    const [previewData, setPreviewData] = useState<{ url: string, type: 'image' | 'model' | 'video' } | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(false)
     const [isDeleting, setIsDeleting] = useState(false)
@@ -93,17 +94,30 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
         if (!isVisible) return
 
         const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+        const url = `${apiHost}/api/preview?path=${encodeURIComponent(file.path)}`
+
+        if (file.type === 'video') {
+            setPreviewData({ url, type: 'video' })
+            setLoading(false)
+            return
+        }
+
         setLoading(true)
-        fetch(`${apiHost}/api/preview?path=${encodeURIComponent(file.path)}`)
+        fetch(url)
             .then(res => {
                 if (!res.ok) throw new Error('No preview')
                 const contentType = res.headers.get('content-type') || ''
                 return res.blob().then(blob => ({ blob, contentType }))
             })
             .then(({ blob, contentType }) => {
-                const url = URL.createObjectURL(blob)
-                const type = contentType.startsWith('model/') ? 'model' : 'image'
-                setPreviewData({ url, type })
+                const objectUrl = URL.createObjectURL(blob)
+                const isVideoExt = file.path.toLowerCase().match(/\.(mp4|webm|mkv|mov|avi)$/)
+                let type: 'image' | 'model' | 'video' = isVideoExt ? 'video' : 'image'
+                if (contentType.startsWith('model/')) type = 'model'
+                else if (contentType.startsWith('video/')) type = 'video'
+
+                setPreviewData({ url: type === 'video' ? url : objectUrl, type })
+                if (type === 'video') URL.revokeObjectURL(objectUrl) // Don't need the blob for video
                 setLoading(false)
             })
             .catch((err) => {
@@ -111,12 +125,12 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
                 setError(true)
                 setLoading(false)
             })
-    }, [isVisible, file.path])
+    }, [isVisible, file.path, file.type])
 
-    // Cleanup blob URL only when component unmounts
+    // Cleanup blob URL only when component unmounts (only for images/models)
     useEffect(() => {
         return () => {
-            if (previewData?.url) {
+            if (previewData?.url && previewData.url.startsWith('blob:')) {
                 URL.revokeObjectURL(previewData.url)
             }
         }
@@ -183,6 +197,25 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
                             alt={file.name}
                             className="w-full h-full object-contain"
                         />
+                    ) : previewData.type === 'video' ? (
+                        <div className="relative w-full h-full overflow-hidden bg-black">
+                            <video
+                                src={previewData.url}
+                                className="w-full h-full object-cover"
+                                muted
+                                playsInline
+                                preload="metadata"
+                                onLoadedMetadata={(e) => {
+                                    const video = e.target as HTMLVideoElement;
+                                    video.currentTime = Math.min(video.duration / 2, 60);
+                                }}
+                                onError={() => setError(true)}
+                            />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20 group-hover:bg-black/0 transition-colors">
+                                <Play className="w-12 h-12 text-white/90 drop-shadow-2xl opacity-80 group-hover:scale-110 transition-transform" />
+                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60 mt-2">Video</span>
+                            </div>
+                        </div>
                     ) : (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-blue-900/20 to-purple-900/20">
                             <Box className="w-16 h-16 mb-2 text-blue-400 opacity-60" />
@@ -264,7 +297,7 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
 
 function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files: FileInfo[], selectedIndex: number, onClose: () => void, onPrev: () => void, onNext: () => void }) {
     const file = files[selectedIndex]
-    const [previewData, setPreviewData] = useState<{ url: string, type: 'image' | 'model', internalPath: string } | null>(null)
+    const [previewData, setPreviewData] = useState<{ url: string, type: 'image' | 'model' | 'video', internalPath: string } | null>(null)
     const [loading, setLoading] = useState(true)
     const [internalPreviews, setInternalPreviews] = useState<{ path: string, size: number }[]>([])
     const [internalIndex, setInternalIndex] = useState(0)
@@ -294,9 +327,18 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
     useEffect(() => {
         const path = internalPreviews.length > 0 ? internalPreviews[internalIndex].path : ''
         const urlParam = path ? `&internal_path=${encodeURIComponent(path)}` : ''
+        const url = `${apiHost}/api/preview?path=${encodeURIComponent(file.path)}${urlParam}`
+
+        // For internal videos, we also prefer direct URL to support Range requests
+        const isVideo = (path || file.path).toLowerCase().match(/\.(mp4|webm|mkv|mov|avi)$/)
+        if (isVideo) {
+            setPreviewData({ url, type: 'video', internalPath: path })
+            setLoading(false)
+            return
+        }
 
         setLoading(true)
-        fetch(`${apiHost}/api/preview?path=${encodeURIComponent(file.path)}${urlParam}`)
+        fetch(url)
             .then(res => {
                 if (!res.ok) throw new Error('No preview')
                 const contentType = res.headers.get('content-type') || ''
@@ -304,9 +346,14 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                 return res.blob().then(blob => ({ blob, contentType, actualInternalPath }))
             })
             .then(({ blob, contentType, actualInternalPath }) => {
-                const url = URL.createObjectURL(blob)
-                const type = contentType.startsWith('model/') ? 'model' : 'image'
-                setPreviewData({ url, type, internalPath: actualInternalPath })
+                const objectUrl = URL.createObjectURL(blob)
+                const isVideoExt = (actualInternalPath || file.path).toLowerCase().match(/\.(mp4|webm|mkv|mov|avi)$/)
+                let type: 'image' | 'model' | 'video' = isVideoExt ? 'video' : 'image'
+                if (contentType.startsWith('model/')) type = 'model'
+                else if (contentType.startsWith('video/')) type = 'video'
+
+                setPreviewData({ url: type === 'video' ? url : objectUrl, type, internalPath: actualInternalPath })
+                if (type === 'video') URL.revokeObjectURL(objectUrl)
 
                 // If we didn't have the list yet, we might find out which index we are at
                 if (internalPreviews.length > 0 && actualInternalPath) {
@@ -342,7 +389,7 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4"
-            onClick={() => { if (previewData?.type !== 'model') onClose(); }}
+            onClick={() => { if (previewData?.type === 'image') onClose(); }}
         >
             {/* Internal File Selector Modal */}
             <AnimatePresence>
@@ -374,7 +421,9 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                                     className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left ${internalIndex === idx ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'hover:bg-white/5 text-gray-400 hover:text-white'}`}
                                 >
                                     <div className={`p-1.5 rounded-lg ${internalIndex === idx ? 'bg-white/20' : 'bg-white/5'}`}>
-                                        {p.path.toLowerCase().endsWith('.stl') || p.path.toLowerCase().endsWith('.obj') ? <Box className="w-3.5 h-3.5" /> : <ImageIcon className="w-3.5 h-3.5" />}
+                                        {p.path.toLowerCase().endsWith('.stl') || p.path.toLowerCase().endsWith('.obj') ? <Box className="w-3.5 h-3.5" /> :
+                                            p.path.toLowerCase().match(/\.(mp4|webm|mkv|mov|avi)$/) ? <Play className="w-3.5 h-3.5" /> :
+                                                <ImageIcon className="w-3.5 h-3.5" />}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <p className="text-[11px] font-bold truncate">{p.path}</p>
@@ -430,6 +479,20 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                         onClick={(e) => e.stopPropagation()}
                     >
                         <STLViewer url={previewData.url} />
+                    </div>
+                ) : previewData?.type === 'video' ? (
+                    <div
+                        className="w-full h-full pointer-events-auto bg-black rounded-3xl overflow-hidden border border-white/10 shadow-2xl flex items-center justify-center"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <video
+                            src={previewData.url}
+                            controls
+                            autoPlay
+                            muted
+                            playsInline
+                            className="max-w-full max-h-full"
+                        />
                     </div>
                 ) : (
                     <img

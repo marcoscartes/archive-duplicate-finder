@@ -32,10 +32,11 @@ type SimilarityGroup struct {
 
 // FileInfo represents basic file information
 type FileInfo struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Size int64  `json:"size"`
-	Type string `json:"type"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	Type    string `json:"type"`
+	ModTime string `json:"mod_time"`
 }
 
 // ExportJSON exports the report to a JSON file

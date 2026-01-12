@@ -122,6 +122,8 @@ func getArchiveType(filename string) string {
 		return "archive"
 	case ".stl", ".obj", ".3ds", ".fbx", ".blend", ".step", ".stp", ".iges", ".igs", ".ply", ".off", ".3mf", ".glb", ".gltf":
 		return "model"
+	case ".mp4", ".webm", ".mkv", ".avi", ".mov", ".wmv", ".flv":
+		return "video"
 	default:
 		return ""
 	}
@@ -150,6 +152,7 @@ func PrintFileStats(files []ArchiveFile) {
 
 	fmt.Printf("  • Archives: %d files\n", stats["archive"])
 	fmt.Printf("  • 3D Models: %d files\n", stats["model"])
+	fmt.Printf("  • Videos: %d files\n", stats["video"])
 	fmt.Printf("  • Total size: %s\n", formatBytes(totalSize))
 }
 

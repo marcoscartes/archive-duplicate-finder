@@ -159,10 +159,11 @@ func main() {
 				var fileInfos []reporter.FileInfo
 				for _, f := range g.Files {
 					fileInfos = append(fileInfos, reporter.FileInfo{
-						Name: f.Name,
-						Path: f.Path,
-						Size: f.Size,
-						Type: f.Type,
+						Name:    f.Name,
+						Path:    f.Path,
+						Size:    f.Size,
+						Type:    f.Type,
+						ModTime: f.ModTime.Format(time.RFC3339),
 					})
 				}
 				results = append(results, reporter.SimilarityGroup{
@@ -254,14 +255,15 @@ func main() {
 		var allFileInfos []reporter.FileInfo
 		for _, f := range files {
 			allFileInfos = append(allFileInfos, reporter.FileInfo{
-				Name: f.Name,
-				Path: f.Path,
-				Size: f.Size,
-				Type: f.Type,
+				Name:    f.Name,
+				Path:    f.Path,
+				Size:    f.Size,
+				Type:    f.Type,
+				ModTime: f.ModTime.Format(time.RFC3339),
 			})
 		}
 
-		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, allFileInfos)
+		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, allFileInfos, cache)
 		srv.SetDebug(config.Debug)
 		go func() {
 			if err := srv.Start(); err != nil {
@@ -343,10 +345,11 @@ func analyzeSameSizeDifferentName(sizeGroups map[int64][]scanner.ArchiveFile, th
 		for i := 0; i < len(group); i++ {
 			f := group[i]
 			currentGroup.Files = append(currentGroup.Files, reporter.FileInfo{
-				Name: f.Name,
-				Path: f.Path,
-				Size: f.Size,
-				Type: f.Type,
+				Name:    f.Name,
+				Path:    f.Path,
+				Size:    f.Size,
+				Type:    f.Type,
+				ModTime: f.ModTime.Format(time.RFC3339),
 			})
 
 			for j := i + 1; j < len(group); j++ {
