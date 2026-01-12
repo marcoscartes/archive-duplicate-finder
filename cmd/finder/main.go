@@ -310,7 +310,7 @@ func parseFlags() Config {
 	flag.Parse()
 
 	if config.Version {
-		fmt.Println("Archive Duplicate Finder v1.7.0")
+		fmt.Println("Archive Duplicate Finder v1.7.1")
 		os.Exit(0)
 	}
 
