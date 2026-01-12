@@ -29,6 +29,7 @@ type Server struct {
 	runStep3Func func()
 	allFiles     []reporter.FileInfo
 	cache        *db.Cache
+	previewSem   chan struct{}
 	mu           sync.Mutex
 }
 
@@ -42,6 +43,7 @@ func NewServer(port int, report *reporter.Report, trashPath string, leaveRef boo
 		runStep3Func: runStep3Func,
 		allFiles:     allFiles,
 		cache:        cache,
+		previewSem:   make(chan struct{}, 4), // Allow 4 concurrent extractions
 	}
 }
 
@@ -194,13 +196,16 @@ func (s *Server) Start() error {
 
 		cachePath := filepath.Join(tempDir, cacheKey+fileExt)
 
-		// If not cached, extract it
+		// If not cached, extract it (limited concurrency)
 		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+			s.previewSem <- struct{}{}
 			data, err := archive.GetFileFromArchive(path, internalPath)
 			if err != nil {
+				<-s.previewSem
 				return c.Status(404).SendString(err.Error())
 			}
 			os.WriteFile(cachePath, data, 0644)
+			<-s.previewSem
 		}
 
 		c.Set("X-Internal-Path", internalPath)

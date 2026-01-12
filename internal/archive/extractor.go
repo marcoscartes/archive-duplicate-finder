@@ -88,56 +88,19 @@ func FindLargestImageInArchive(archivePath string) ([]byte, string, error) {
 	}
 }
 
-// FindPreviewInArchive returns preview content from archive:
-// 1. First tries to find the largest JPG/PNG image
-// 2. If no images, looks for the largest MP4/WebM video
-// 3. If no videos, looks for STL files containing keywords: "full", "whole", "body", "complete"
-// 4. Fallback: finds the largest STL file if no keywords match
+// FindPreviewInArchive returns preview content and filename from archive efficiently
 func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
-	// Try to find largest image first
-	data, filename, err := FindLargestImageInArchive(archivePath)
-	if err == nil {
-		return data, filename, nil
+	filename, err := FindPreviewPathInArchive(archivePath)
+	if err != nil {
+		return nil, "", err
 	}
 
-	// No image, try to find largest video
-	data, filename, err = FindLargestVideoInArchive(archivePath)
-	if err == nil {
-		return data, filename, nil
+	data, err := GetFileFromArchive(archivePath, filename)
+	if err != nil {
+		return nil, "", err
 	}
 
-	// No video found, try to find STL with keywords
-	ext := strings.ToLower(filepath.Ext(archivePath))
-
-	var stlData []byte
-	var stlName string
-
-	switch ext {
-	case ".zip":
-		stlData, stlName, err = findKeywordSTLZIP(archivePath)
-		if err != nil {
-			// Fallback to largest STL
-			stlData, stlName, err = findLargestSTLZIP(archivePath)
-		}
-	case ".rar":
-		stlData, stlName, err = findKeywordSTLRAR(archivePath)
-		if err != nil {
-			stlData, stlName, err = findLargestSTLRAR(archivePath)
-		}
-	case ".7z":
-		stlData, stlName, err = findKeywordSTL7Z(archivePath)
-		if err != nil {
-			stlData, stlName, err = findLargestSTL7Z(archivePath)
-		}
-	default:
-		return nil, "", fmt.Errorf("no preview found in archive")
-	}
-
-	if err == nil && len(stlData) > 0 {
-		return stlData, stlName, nil
-	}
-
-	return nil, "", fmt.Errorf("no preview found in archive")
+	return data, filename, nil
 }
 
 // FindPreviewPathInArchive returns the internal path of the best preview candidate
@@ -866,19 +829,82 @@ func CompareArchiveContents(archive1, archive2 string) (common, unique1, unique2
 	return common, unique1, unique2, nil
 }
 
-// GetFileFromArchive extracts a specific file from an archive
+// GetFileFromArchive extracts a specific file from an archive efficiently
 func GetFileFromArchive(archivePath, filename string) ([]byte, error) {
-	contents, err := ExtractArchive(archivePath)
+	ext := strings.ToLower(filepath.Ext(archivePath))
+
+	switch ext {
+	case ".zip":
+		return getFileZIP(archivePath, filename)
+	case ".rar":
+		return getFileRAR(archivePath, filename)
+	case ".7z":
+		return getFile7Z(archivePath, filename)
+	default:
+		return nil, fmt.Errorf("unsupported archive format for extraction: %s", ext)
+	}
+}
+
+func getFileZIP(archivePath, filename string) ([]byte, error) {
+	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return nil, err
 	}
+	defer reader.Close()
 
-	data, exists := contents[filename]
-	if !exists {
-		return nil, fmt.Errorf("file %s not found in archive", filename)
+	for _, f := range reader.File {
+		if f.Name == filename {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			return io.ReadAll(rc)
+		}
 	}
+	return nil, fmt.Errorf("file not found in ZIP")
+}
 
-	return data, nil
+func getFileRAR(archivePath, filename string) ([]byte, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if header.Name == filename {
+			return io.ReadAll(reader)
+		}
+	}
+	return nil, fmt.Errorf("file not found in RAR")
+}
+
+func getFile7Z(archivePath, filename string) ([]byte, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	for _, f := range reader.File {
+		if f.Name == filename {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			return io.ReadAll(rc)
+		}
+	}
+	return nil, fmt.Errorf("file not found in 7Z")
 }
 
 // CalculateHash calculates SHA-256 hash of file contents

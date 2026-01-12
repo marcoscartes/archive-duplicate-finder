@@ -51,48 +51,53 @@ interface Report {
 }
 
 function PreviewImage({ path }: { path: string }) {
-  const [imgUrl, setImgUrl] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [isHovering, setIsHovering] = useState(true)
 
-  useEffect(() => {
-    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
-    setLoading(true)
-    fetch(`${apiHost}/api/preview?path=${encodeURIComponent(path)}`)
-      .then(res => {
-        if (!res.ok) throw new Error('No preview')
-        return res.blob()
-      })
-      .then(blob => {
-        setImgUrl(URL.createObjectURL(blob))
-        setLoading(false)
-      })
-      .catch(() => {
-        setError(true)
-        setLoading(false)
-      })
-  }, [path])
+  const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+  const previewUrl = `${apiHost}/api/preview?path=${encodeURIComponent(path)}`
 
-  if (loading) return (
-    <div className="w-full aspect-video flex items-center justify-center bg-black/40 rounded-lg">
-      <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-    </div>
-  )
-
-  if (error || !imgUrl) return (
-    <div className="w-full aspect-video flex flex-col items-center justify-center bg-black/40 rounded-lg text-gray-600">
-      <ImageIcon className="w-8 h-8 mb-1 opacity-20" />
-      <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">No Preview Found</span>
-    </div>
-  )
+  // Basic extension check for UI hints
+  const isVideo = /\.(mp4|webm|mov|mkv|avi)$/i.test(path)
+  const is3D = /\.(stl|obj|3mf)$/i.test(path)
 
   return (
-    <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-white/10 bg-black/40">
-      <img src={imgUrl} alt="Preview" className="w-full h-full object-contain" />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
+    <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-white/10 bg-black/40 flex items-center justify-center">
+      {error ? (
+        <div className="flex flex-col items-center justify-center opacity-40">
+          <ImageIcon className="w-8 h-8 mb-1" />
+          <span className="text-[10px] font-bold uppercase tracking-widest">Preview Error</span>
+        </div>
+      ) : is3D ? (
+        <div className="flex flex-col items-center justify-center text-blue-400 opacity-60">
+          <Box className="w-10 h-10 mb-1" />
+          <span className="text-[10px] font-bold uppercase tracking-widest">3D Model</span>
+        </div>
+      ) : isVideo ? (
+        <video
+          src={previewUrl}
+          className="w-full h-full object-contain"
+          onLoadedMetadata={(e) => {
+            const video = e.target as HTMLVideoElement;
+            video.currentTime = Math.min(video.duration / 2, 60);
+          }}
+          onError={() => setError(true)}
+          muted
+          playsInline
+        />
+      ) : (
+        <img
+          src={previewUrl}
+          alt="Preview"
+          className="w-full h-full object-contain"
+          onError={() => setError(true)}
+        />
+      )}
+
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
       <div className="absolute bottom-2 left-3 flex items-center gap-2">
-        <ImageIcon className="w-3 h-3 text-blue-400" />
-        <span className="text-[8px] font-bold text-white uppercase tracking-tighter">Archive Intelligence Preview</span>
+        <Zap className="w-3 h-3 text-blue-400 animate-pulse" />
+        <span className="text-[8px] font-bold text-white/80 uppercase tracking-widest">AI Preview Stream</span>
       </div>
     </div>
   )
