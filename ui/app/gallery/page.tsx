@@ -15,7 +15,8 @@ import {
     ExternalLink,
     X,
     ChevronLeft,
-    ChevronRight
+    ChevronRight,
+    Images
 } from 'lucide-react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -256,22 +257,57 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
 
 function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files: FileInfo[], selectedIndex: number, onClose: () => void, onPrev: () => void, onNext: () => void }) {
     const file = files[selectedIndex]
-    const [previewData, setPreviewData] = useState<{ url: string, type: 'image' | 'model' } | null>(null)
+    const [previewData, setPreviewData] = useState<{ url: string, type: 'image' | 'model', internalPath: string } | null>(null)
     const [loading, setLoading] = useState(true)
+    const [internalPreviews, setInternalPreviews] = useState<string[]>([])
+    const [internalIndex, setInternalIndex] = useState(0)
+
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+
+    // Fetch list of previews in this archive
+    useEffect(() => {
+        fetch(`${apiHost}/api/list-previews?path=${encodeURIComponent(file.path)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.previews && data.previews.length > 0) {
+                    setInternalPreviews(data.previews)
+                    // The default preview might be any of these, let's start with index 0
+                    // unless we want to find the one that FindPreviewInArchive returns.
+                    // For simplicity, let's just use the first internal preview or the logic below.
+                }
+            })
+            .catch(err => console.error("Failed to list previews:", err))
+    }, [file.path])
+
+    // Fetch the 0-th image when the archive changes
+    useEffect(() => {
+        setInternalIndex(0)
+    }, [file.path])
 
     useEffect(() => {
-        const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+        const path = internalPreviews.length > 0 ? internalPreviews[internalIndex] : ''
+        const urlParam = path ? `&internal_path=${encodeURIComponent(path)}` : ''
+
         setLoading(true)
-        fetch(`${apiHost}/api/preview?path=${encodeURIComponent(file.path)}`)
+        fetch(`${apiHost}/api/preview?path=${encodeURIComponent(file.path)}${urlParam}`)
             .then(res => {
                 if (!res.ok) throw new Error('No preview')
                 const contentType = res.headers.get('content-type') || ''
-                return res.blob().then(blob => ({ blob, contentType }))
+                const actualInternalPath = res.headers.get('X-Internal-Path') || path
+                return res.blob().then(blob => ({ blob, contentType, actualInternalPath }))
             })
-            .then(({ blob, contentType }) => {
+            .then(({ blob, contentType, actualInternalPath }) => {
                 const url = URL.createObjectURL(blob)
                 const type = contentType.startsWith('model/') ? 'model' : 'image'
-                setPreviewData({ url, type })
+                setPreviewData({ url, type, internalPath: actualInternalPath })
+
+                // If we didn't have the list yet, we might find out which index we are at
+                if (internalPreviews.length > 0 && actualInternalPath) {
+                    const idx = internalPreviews.indexOf(actualInternalPath)
+                    if (idx !== -1 && idx !== internalIndex) {
+                        setInternalIndex(idx)
+                    }
+                }
                 setLoading(false)
             })
             .catch(() => {
@@ -283,7 +319,7 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                 URL.revokeObjectURL(previewData.url)
             }
         }
-    }, [file.path])
+    }, [file.path, internalIndex, internalPreviews.length > 0])
 
     const handleOpenOriginal = (e: React.MouseEvent) => {
         e.stopPropagation()
@@ -349,19 +385,48 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                 )}
 
                 {/* Floating Info Overlay */}
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 p-4 bg-black/60 backdrop-blur-md border border-white/10 rounded-2xl flex items-center gap-6 shadow-2xl pointer-events-auto">
-                    <div>
-                        <p className="text-sm font-bold text-white">{file.name}</p>
-                        <p className="text-xs text-gray-400">{formatBytes(file.size)}</p>
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 p-4 bg-black/60 backdrop-blur-md border border-white/10 rounded-2xl flex flex-col items-center gap-3 shadow-2xl pointer-events-auto min-w-[400px]">
+                    <div className="flex items-center gap-6 w-full justify-between">
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-bold text-white truncate">{file.name}</p>
+                            <p className="text-[10px] text-blue-400 font-mono truncate mt-0.5">{previewData?.internalPath}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter mr-2">
+                                {formatBytes(file.size)}
+                            </span>
+                            <button
+                                onClick={handleOpenOriginal}
+                                className="p-2 bg-blue-500 hover:bg-blue-400 rounded-xl text-white transition-all shadow-lg"
+                                title="Open original file"
+                            >
+                                <ExternalLink className="w-4 h-4" />
+                            </button>
+                        </div>
                     </div>
-                    <div className="h-8 w-px bg-white/10" />
-                    <button
-                        onClick={handleOpenOriginal}
-                        className="px-4 py-2 bg-blue-500 hover:bg-blue-400 rounded-xl text-xs font-bold text-white transition-all flex items-center gap-2"
-                    >
-                        <ExternalLink className="w-4 h-4" />
-                        Open Original
-                    </button>
+
+                    {internalPreviews.length > 1 && (
+                        <div className="flex items-center gap-4 pt-2 border-t border-white/5 w-full justify-center">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setInternalIndex(i => (i - 1 + internalPreviews.length) % internalPreviews.length) }}
+                                className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all"
+                            >
+                                <ChevronLeft className="w-4 h-4" />
+                            </button>
+                            <div className="flex items-center gap-2">
+                                <Images className="w-3.5 h-3.5 text-blue-400" />
+                                <span className="text-[10px] font-bold text-gray-300">
+                                    {internalIndex + 1} / {internalPreviews.length} INTERNAL FILES
+                                </span>
+                            </div>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setInternalIndex(i => (i + 1) % internalPreviews.length) }}
+                                className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all"
+                            >
+                                <ChevronRight className="w-4 h-4" />
+                            </button>
+                        </div>
+                    )}
                 </div>
             </motion.div>
         </motion.div>

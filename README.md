@@ -20,7 +20,7 @@
 - **🚀 Turbo Mode:** Experimental high-performance Bit-Parallel engine for extreme concurrent throughput.
 - **📊 Smart Pagination:** Smoothly handles massive datasets with configurable page sizes (10, 20, 50, 100).
 - **🔔 Live Notifications:** Receive browser alerts when background analysis finishes.
-- **🖼️ Archive Intelligence Preview 2.0:** Deep-recursive extraction now finds images and STL models even inside deeply nested subdirectories. Optimized "No-Stretch" logic ensures full visibility.
+- **🖼️ Archive Intelligence 3.0:** Deep-recursive extraction with **internal browsing**. View ALL images and STL models inside an archive without extracting them.
 - **🎨 Cinematic Gallery Experience:** 3x3 adaptive layout with a new **Global Viewer** featuring fluid navigation (Prev/Next), keyboard controls (Arrows/Esc), and high-visibility ergonomic controls.
 - **🔬 3D Content Awareness:** Deep-dives into archives to compare STL file geometry with an optimized Three.js viewer (Auto-scale & Zoom) + Fallback to largest STL for unnamed files.
 - **📂 Explorer Integration:** Open files directly with associated apps or reveal them in the system folder from the dashboard.

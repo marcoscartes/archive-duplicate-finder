@@ -29,6 +29,36 @@ func ExtractArchive(archivePath string) (map[string][]byte, error) {
 	}
 }
 
+// ListPreviewsInArchive returns a list of all files that can be used as previews
+func ListPreviewsInArchive(archivePath string) ([]string, error) {
+	ext := strings.ToLower(filepath.Ext(archivePath))
+	var files []string
+	var err error
+
+	switch ext {
+	case ".zip":
+		files, err = listFilesZIP(archivePath)
+	case ".rar":
+		files, err = listFilesRAR(archivePath)
+	case ".7z":
+		files, err = listFiles7Z(archivePath)
+	default:
+		return nil, fmt.Errorf("unsupported archive format: %s", ext)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	var previews []string
+	for _, f := range files {
+		if isImageFile(f) || isSTLFile(f) {
+			previews = append(previews, f)
+		}
+	}
+	return previews, nil
+}
+
 // FindFirstImageInArchive returns the contents of the first image (jpg, jpeg, png) found in the archive
 // Deprecated: Use FindLargestImageInArchive for better quality previews
 func FindFirstImageInArchive(archivePath string) ([]byte, string, error) {
@@ -659,4 +689,59 @@ func CalculateHash(data []byte) string {
 // AreFilesIdentical checks if two byte arrays are identical
 func AreFilesIdentical(data1, data2 []byte) bool {
 	return bytes.Equal(data1, data2)
+}
+
+func listFilesZIP(archivePath string) ([]string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	var files []string
+	for _, f := range reader.File {
+		if !f.FileInfo().IsDir() {
+			files = append(files, f.Name)
+		}
+	}
+	return files, nil
+}
+
+func listFilesRAR(archivePath string) ([]string, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	var files []string
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !header.IsDir {
+			files = append(files, header.Name)
+		}
+	}
+	return files, nil
+}
+
+func listFiles7Z(archivePath string) ([]string, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	var files []string
+	for _, f := range reader.File {
+		if !f.FileInfo().IsDir() {
+			files = append(files, f.Name)
+		}
+	}
+	return files, nil
 }

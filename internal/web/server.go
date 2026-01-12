@@ -123,13 +123,14 @@ func (s *Server) Start() error {
 
 	api.Get("/preview", func(c *fiber.Ctx) error {
 		path := c.Query("path")
+		internalPath := c.Query("internal_path")
 		if path == "" {
 			return c.Status(400).SendString("Path is required")
 		}
 
 		// Check if it's a direct STL/OBJ file
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext == ".stl" || ext == ".obj" {
+		if internalPath == "" && (ext == ".stl" || ext == ".obj") {
 			// Serve the file directly
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -143,10 +144,23 @@ func (s *Server) Start() error {
 			return c.Send(data)
 		}
 
-		// Otherwise, try to extract preview from archive
-		data, filename, err := archive.FindPreviewInArchive(path)
-		if err != nil {
-			return c.Status(404).SendString(err.Error())
+		var data []byte
+		var filename string
+		var err error
+
+		if internalPath != "" {
+			// Fetch specific file from archive
+			data, err = archive.GetFileFromArchive(path, internalPath)
+			if err != nil {
+				return c.Status(404).SendString(err.Error())
+			}
+			filename = internalPath
+		} else {
+			// Otherwise, try to extract default (largest) preview from archive
+			data, filename, err = archive.FindPreviewInArchive(path)
+			if err != nil {
+				return c.Status(404).SendString(err.Error())
+			}
 		}
 
 		// Set content type based on extension
@@ -164,7 +178,24 @@ func (s *Server) Start() error {
 		}
 
 		c.Set("Content-Type", contentType)
+		c.Set("X-Internal-Path", filename) // Let the client know which file was selected
 		return c.Send(data)
+	})
+
+	api.Get("/list-previews", func(c *fiber.Ctx) error {
+		path := c.Query("path")
+		if path == "" {
+			return c.Status(400).SendString("Path is required")
+		}
+
+		previews, err := archive.ListPreviewsInArchive(path)
+		if err != nil {
+			return c.Status(500).SendString(err.Error())
+		}
+
+		return c.Status(200).JSON(fiber.Map{
+			"previews": previews,
+		})
 	})
 
 	api.Get("/open", func(c *fiber.Ctx) error {
