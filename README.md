@@ -20,9 +20,9 @@
 - **🚀 Turbo Mode:** Experimental high-performance Bit-Parallel engine for extreme concurrent throughput.
 - **📊 Smart Pagination:** Smoothly handles massive datasets with configurable page sizes (10, 20, 50, 100).
 - **🔔 Live Notifications:** Receive browser alerts when background analysis finishes.
-- **🖼️ Archive Intelligence Preview:** Hover over archives or browse the gallery to see images without extraction. Optimized "No-Stretch" logic ensures full visibility.
-- **🎨 Enhanced Gallery View:** Dedicated 3x3 fixed grid layout that adapts to screen height, featuring intelligent object-contain thumbnails.
-- **🔬 3D Content Awareness:** Deep-dives into archives to compare STL file geometry with an optimized Three.js viewer (Auto-scale & Zoom).
+- **🖼️ Archive Intelligence Preview 2.0:** Deep-recursive extraction now finds images and STL models even inside deeply nested subdirectories. Optimized "No-Stretch" logic ensures full visibility.
+- **🎨 Cinematic Gallery Experience:** 3x3 adaptive layout with a new **Global Viewer** featuring fluid navigation (Prev/Next), keyboard controls (Arrows/Esc), and high-visibility ergonomic controls.
+- **🔬 3D Content Awareness:** Deep-dives into archives to compare STL file geometry with an optimized Three.js viewer (Auto-scale & Zoom) + Fallback to largest STL for unnamed files.
 - **📂 Explorer Integration:** Open files directly with associated apps or reveal them in the system folder from the dashboard.
 - **🛡️ Multi-volume Protection:** Automatically protects split archives (part1, part2) from deletion.
 - **🗑️ Trash Mode:** Move duplicates to a safe folder instead of permanent deletion.
@@ -100,8 +100,8 @@ This software was built and refined with the assistance of **Antigravity**, an A
 - Glassmorphic Web Dashboard with Next.js/Three.js.
 - Real-time archive preview (On-Hover extraction).
 - Multi-platform Explorer/Reveal integration.
-- **Gallery 2.0:** Implemented a fixed 3x3 layout with dynamic height adaptation and "No-Stretch" thumbnail logic.
-- **STL Viewer Pro:** Optimized 3D model scale (10%) and precise camera positioning for varied model sizes.
+- **Cinematic Viewer:** Implemented a global modal system with ergonomic navigation, backdrop-blur effects, and keyboard support.
+- **Robust Extractor:** Refactored extraction logic to handle nested subfolders, system folders (MACOSX) filtering, and intelligent STL fallbacks.
 - **UI Consistency:** Unified centered 1000px layout and intelligent thumbnails throughout the dashboard.
 - PDF reporting modules.
 - Multi-volume archive detection logic.

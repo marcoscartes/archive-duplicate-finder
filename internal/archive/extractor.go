@@ -53,8 +53,9 @@ func FindLargestImageInArchive(archivePath string) ([]byte, string, error) {
 }
 
 // FindPreviewInArchive returns preview content from archive:
-// 1. First tries to find the largest JPG image
+// 1. First tries to find the largest JPG/PNG image
 // 2. If no images found, looks for STL files containing keywords: "full", "whole", "body", "complete"
+// 3. Fallback: finds the largest STL file if no keywords match
 func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
 	// Try to find largest image first
 	data, filename, err := FindLargestImageInArchive(archivePath)
@@ -65,25 +66,48 @@ func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
 	// No image found, try to find STL with keywords
 	ext := strings.ToLower(filepath.Ext(archivePath))
 
+	var stlData []byte
+	var stlName string
+
 	switch ext {
 	case ".zip":
-		return findKeywordSTLZIP(archivePath)
+		stlData, stlName, err = findKeywordSTLZIP(archivePath)
+		if err != nil {
+			// Fallback to largest STL
+			stlData, stlName, err = findLargestSTLZIP(archivePath)
+		}
 	case ".rar":
-		return findKeywordSTLRAR(archivePath)
+		stlData, stlName, err = findKeywordSTLRAR(archivePath)
+		if err != nil {
+			stlData, stlName, err = findLargestSTLRAR(archivePath)
+		}
 	case ".7z":
-		return findKeywordSTL7Z(archivePath)
+		stlData, stlName, err = findKeywordSTL7Z(archivePath)
+		if err != nil {
+			stlData, stlName, err = findLargestSTL7Z(archivePath)
+		}
 	default:
 		return nil, "", fmt.Errorf("no preview found in archive")
 	}
+
+	if err == nil && len(stlData) > 0 {
+		return stlData, stlName, nil
+	}
+
+	return nil, "", fmt.Errorf("no preview found in archive")
 }
 
 func isSTLFile(filename string) bool {
-	return strings.ToLower(filepath.Ext(filename)) == ".stl"
+	lower := strings.ToLower(filename)
+	if strings.Contains(lower, "__macosx") {
+		return false
+	}
+	return strings.HasSuffix(lower, ".stl")
 }
 
 func hasKeyword(filename string) bool {
 	lower := strings.ToLower(filename)
-	keywords := []string{"full", "whole", "body", "complete"}
+	keywords := []string{"full", "whole", "body", "complete", "merged", "single"}
 	for _, kw := range keywords {
 		if strings.Contains(lower, kw) {
 			return true
@@ -100,7 +124,8 @@ func findKeywordSTLZIP(archivePath string) ([]byte, string, error) {
 	defer reader.Close()
 
 	for _, file := range reader.File {
-		if !file.FileInfo().IsDir() && isSTLFile(file.Name) && hasKeyword(file.Name) {
+		name := strings.ReplaceAll(file.Name, "\\", "/")
+		if !file.FileInfo().IsDir() && isSTLFile(name) && hasKeyword(name) {
 			rc, err := file.Open()
 			if err != nil {
 				continue
@@ -113,6 +138,42 @@ func findKeywordSTLZIP(archivePath string) ([]byte, string, error) {
 		}
 	}
 	return nil, "", fmt.Errorf("no STL with keywords found")
+}
+
+func findLargestSTLZIP(archivePath string) ([]byte, string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize uint64
+
+	for _, file := range reader.File {
+		name := strings.ReplaceAll(file.Name, "\\", "/")
+		if !file.FileInfo().IsDir() && isSTLFile(name) {
+			if file.UncompressedSize64 > largestSize {
+				rc, err := file.Open()
+				if err != nil {
+					continue
+				}
+				data, err := io.ReadAll(rc)
+				rc.Close()
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = file.Name
+					largestSize = uint64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no STL found")
+	}
+	return largestData, largestName, nil
 }
 
 func findKeywordSTLRAR(archivePath string) ([]byte, string, error) {
@@ -131,7 +192,8 @@ func findKeywordSTLRAR(archivePath string) ([]byte, string, error) {
 			return nil, "", err
 		}
 
-		if !header.IsDir && isSTLFile(header.Name) && hasKeyword(header.Name) {
+		name := strings.ReplaceAll(header.Name, "\\", "/")
+		if !header.IsDir && isSTLFile(name) && hasKeyword(name) {
 			data, err := io.ReadAll(reader)
 			if err == nil && len(data) > 0 {
 				return data, header.Name, nil
@@ -139,6 +201,45 @@ func findKeywordSTLRAR(archivePath string) ([]byte, string, error) {
 		}
 	}
 	return nil, "", fmt.Errorf("no STL with keywords found")
+}
+
+func findLargestSTLRAR(archivePath string) ([]byte, string, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize int64
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+
+		name := strings.ReplaceAll(header.Name, "\\", "/")
+		if !header.IsDir && isSTLFile(name) {
+			if header.UnPackedSize > largestSize {
+				data, err := io.ReadAll(reader)
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = header.Name
+					largestSize = int64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no STL found")
+	}
+	return largestData, largestName, nil
 }
 
 func findKeywordSTL7Z(archivePath string) ([]byte, string, error) {
@@ -149,7 +250,8 @@ func findKeywordSTL7Z(archivePath string) ([]byte, string, error) {
 	defer reader.Close()
 
 	for _, file := range reader.File {
-		if !file.FileInfo().IsDir() && isSTLFile(file.Name) && hasKeyword(file.Name) {
+		name := strings.ReplaceAll(file.Name, "\\", "/")
+		if !file.FileInfo().IsDir() && isSTLFile(name) && hasKeyword(name) {
 			rc, err := file.Open()
 			if err != nil {
 				continue
@@ -164,8 +266,48 @@ func findKeywordSTL7Z(archivePath string) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("no STL with keywords found")
 }
 
+func findLargestSTL7Z(archivePath string) ([]byte, string, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+
+	var largestData []byte
+	var largestName string
+	var largestSize uint64
+
+	for _, file := range reader.File {
+		name := strings.ReplaceAll(file.Name, "\\", "/")
+		if !file.FileInfo().IsDir() && isSTLFile(name) {
+			if file.UncompressedSize > largestSize {
+				rc, err := file.Open()
+				if err != nil {
+					continue
+				}
+				data, err := io.ReadAll(rc)
+				rc.Close()
+				if err == nil && len(data) > 0 {
+					largestData = data
+					largestName = file.Name
+					largestSize = uint64(len(data))
+				}
+			}
+		}
+	}
+
+	if largestData == nil {
+		return nil, "", fmt.Errorf("no STL found")
+	}
+	return largestData, largestName, nil
+}
+
 func isImageFile(filename string) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
+	lower := strings.ToLower(filename)
+	if strings.Contains(lower, "__macosx") || strings.Contains(lower, "@eaDir") {
+		return false
+	}
+	ext := filepath.Ext(lower)
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
 }
 
