@@ -20,11 +20,11 @@
 - **🚀 Turbo Mode:** Experimental high-performance Bit-Parallel engine for extreme concurrent throughput.
 - **📊 Smart Pagination:** Smoothly handles massive datasets with configurable page sizes (10, 20, 50, 100).
 - **🔔 Live Notifications:** Receive browser alerts when background analysis finishes.
-- **🖼️ Archive Intelligence 3.0:** Deep-recursive extraction with **internal browsing**. View ALL images and STL models inside an archive without extracting them.
-- **🎨 Cinematic Gallery Experience:** 3x3 adaptive layout with a new **Global Viewer** featuring fluid navigation (Prev/Next), keyboard controls (Arrows/Esc), and high-visibility ergonomic controls.
+- **🖼️ Archive Intelligence 3.0:** Deep-recursive extraction with **internal browsing**. View ALL images and STL models inside an archive without extracting them. Now supporting **25+ formats** including `.fbx`, `.blend`, `.gltf`, `.glb`, `.3mf`, `.step`, `.iso` and more.
+- **🎨 Cinematic Gallery Experience:** 3x3 adaptive layout with a new **Global Viewer** featuring fluid navigation (Prev/Next), keyboard controls (Arrows/Esc), high-visibility ergonomic controls, and an **Internal File Selector** to pick specific files within an archive. Now including **advanced sorting** (Name, Size, Date) and **extension filtering** (ZIP, RAR, 7Z, STL, OBJ).
 - **🔬 3D Content Awareness:** Deep-dives into archives to compare STL file geometry with an optimized Three.js viewer (Auto-scale & Zoom) + Fallback to largest STL for unnamed files.
 - **📂 Explorer Integration:** Open files directly with associated apps or reveal them in the system folder from the dashboard.
-- **🛡️ Multi-volume Protection:** Automatically protects split archives (part1, part2) from deletion.
+- **🛡️ Multi-volume Protection:** Automatically protects split archives (part1, part2, .001) from deletion.
 - **🗑️ Trash Mode:** Move duplicates to a safe folder instead of permanent deletion.
 - **📝 Reference Tracking:** Leave a `.txt` file pointing to the location of the preserved original.
 - **🕹️ Interactive Mode:** Take control and decide manually which duplicates to keep or remove.

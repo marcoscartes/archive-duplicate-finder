@@ -250,7 +250,18 @@ func main() {
 
 	// Start web dashboard
 	if config.Web {
-		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger)
+		// Convert scanner.ArchiveFile to reporter.FileInfo for the dashboard
+		var allFileInfos []reporter.FileInfo
+		for _, f := range files {
+			allFileInfos = append(allFileInfos, reporter.FileInfo{
+				Name: f.Name,
+				Path: f.Path,
+				Size: f.Size,
+				Type: f.Type,
+			})
+		}
+
+		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, allFileInfos)
 		srv.SetDebug(config.Debug)
 		go func() {
 			if err := srv.Start(); err != nil {

@@ -12,6 +12,12 @@ import (
 	"github.com/nwaples/rardecode/v2"
 )
 
+// PreviewInfo represents information about a previewable file inside an archive
+type PreviewInfo struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
 // ExtractArchive extracts all files from an archive and returns them as a map
 // Key: filename, Value: file contents
 func ExtractArchive(archivePath string) (map[string][]byte, error) {
@@ -30,9 +36,9 @@ func ExtractArchive(archivePath string) (map[string][]byte, error) {
 }
 
 // ListPreviewsInArchive returns a list of all files that can be used as previews
-func ListPreviewsInArchive(archivePath string) ([]string, error) {
+func ListPreviewsInArchive(archivePath string) ([]PreviewInfo, error) {
 	ext := strings.ToLower(filepath.Ext(archivePath))
-	var files []string
+	var files []PreviewInfo
 	var err error
 
 	switch ext {
@@ -50,9 +56,9 @@ func ListPreviewsInArchive(archivePath string) ([]string, error) {
 		return nil, err
 	}
 
-	var previews []string
+	var previews []PreviewInfo
 	for _, f := range files {
-		if isImageFile(f) || isSTLFile(f) {
+		if isImageFile(f.Path) || isSTLFile(f.Path) {
 			previews = append(previews, f)
 		}
 	}
@@ -691,30 +697,33 @@ func AreFilesIdentical(data1, data2 []byte) bool {
 	return bytes.Equal(data1, data2)
 }
 
-func listFilesZIP(archivePath string) ([]string, error) {
+func listFilesZIP(archivePath string) ([]PreviewInfo, error) {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
 
-	var files []string
+	var files []PreviewInfo
 	for _, f := range reader.File {
 		if !f.FileInfo().IsDir() {
-			files = append(files, f.Name)
+			files = append(files, PreviewInfo{
+				Path: f.Name,
+				Size: int64(f.UncompressedSize64),
+			})
 		}
 	}
 	return files, nil
 }
 
-func listFilesRAR(archivePath string) ([]string, error) {
+func listFilesRAR(archivePath string) ([]PreviewInfo, error) {
 	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
 
-	var files []string
+	var files []PreviewInfo
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
@@ -724,23 +733,29 @@ func listFilesRAR(archivePath string) ([]string, error) {
 			return nil, err
 		}
 		if !header.IsDir {
-			files = append(files, header.Name)
+			files = append(files, PreviewInfo{
+				Path: header.Name,
+				Size: header.UnPackedSize,
+			})
 		}
 	}
 	return files, nil
 }
 
-func listFiles7Z(archivePath string) ([]string, error) {
+func listFiles7Z(archivePath string) ([]PreviewInfo, error) {
 	reader, err := sevenzip.OpenReader(archivePath)
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
 
-	var files []string
+	var files []PreviewInfo
 	for _, f := range reader.File {
 		if !f.FileInfo().IsDir() {
-			files = append(files, f.Name)
+			files = append(files, PreviewInfo{
+				Path: f.Name,
+				Size: int64(f.UncompressedSize),
+			})
 		}
 	}
 	return files, nil

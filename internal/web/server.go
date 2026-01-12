@@ -26,17 +26,19 @@ type Server struct {
 	leaveRef     bool
 	debug        bool
 	runStep3Func func()
+	allFiles     []reporter.FileInfo
 	mu           sync.Mutex
 }
 
 // NewServer creates a new web dashboard server
-func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func()) *Server {
+func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), allFiles []reporter.FileInfo) *Server {
 	return &Server{
 		addr:         fmt.Sprintf(":%d", port),
 		report:       report,
 		trashPath:    trashPath,
 		leaveRef:     leaveRef,
 		runStep3Func: runStep3Func,
+		allFiles:     allFiles,
 	}
 }
 
@@ -92,32 +94,31 @@ func (s *Server) Start() error {
 	})
 
 	api.Get("/all-files", func(c *fiber.Ctx) error {
-		// Collect all unique files from both size groups and similar groups
-		fileMap := make(map[string]reporter.FileInfo)
-
-		// Add files from size groups
-		for _, group := range s.report.SizeGroups {
-			for _, file := range group.Files {
-				fileMap[file.Path] = file
+		// Use the full scanned list if available, otherwise fallback to map-based collection
+		var files []reporter.FileInfo
+		if len(s.allFiles) > 0 {
+			files = s.allFiles
+		} else {
+			fileMap := make(map[string]reporter.FileInfo)
+			for _, group := range s.report.SizeGroups {
+				for _, file := range group.Files {
+					fileMap[file.Path] = file
+				}
 			}
-		}
-
-		// Add files from similar groups
-		for _, group := range s.report.SimilarGroups {
-			for _, file := range group.Files {
-				fileMap[file.Path] = file
+			for _, group := range s.report.SimilarGroups {
+				for _, file := range group.Files {
+					fileMap[file.Path] = file
+				}
 			}
-		}
-
-		// Convert map to slice
-		allFiles := make([]reporter.FileInfo, 0, len(fileMap))
-		for _, file := range fileMap {
-			allFiles = append(allFiles, file)
+			files = make([]reporter.FileInfo, 0, len(fileMap))
+			for _, file := range fileMap {
+				files = append(files, file)
+			}
 		}
 
 		return c.Status(200).JSON(fiber.Map{
-			"files": allFiles,
-			"total": len(allFiles),
+			"files": files,
+			"total": len(files),
 		})
 	})
 
@@ -321,7 +322,17 @@ func (s *Server) Start() error {
 	// Serve static dashboard files
 	app.Static("/", "./ui/out")
 
-	// Placeholder for static dashboard (will be overwritten by app.Static but good for fallback)
+	// Final fallback for SPA routing: any non-API route that 404s should serve index.html
+	// This allows browser reloads on routes like /gallery to work correctly.
+	app.Use(func(c *fiber.Ctx) error {
+		// If it's an API route, return 404
+		if strings.HasPrefix(c.Path(), "/api") {
+			return c.Next()
+		}
+		// Otherwise serve index.html from static out
+		return c.SendFile("./ui/out/index.html")
+	})
+
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.Status(200).SendString("Archive Duplicate Finder Dashboard API is running")
 	})

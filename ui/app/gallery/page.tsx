@@ -16,7 +16,14 @@ import {
     X,
     ChevronLeft,
     ChevronRight,
-    Images
+    Images,
+    ArrowUpAZ,
+    ArrowDownAZ,
+    ArrowUp01,
+    ArrowDown01,
+    Clock,
+    Filter,
+    ArrowDownWideNarrow
 } from 'lucide-react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -259,7 +266,7 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
     const file = files[selectedIndex]
     const [previewData, setPreviewData] = useState<{ url: string, type: 'image' | 'model', internalPath: string } | null>(null)
     const [loading, setLoading] = useState(true)
-    const [internalPreviews, setInternalPreviews] = useState<string[]>([])
+    const [internalPreviews, setInternalPreviews] = useState<{ path: string, size: number }[]>([])
     const [internalIndex, setInternalIndex] = useState(0)
 
     const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
@@ -285,7 +292,7 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
     }, [file.path])
 
     useEffect(() => {
-        const path = internalPreviews.length > 0 ? internalPreviews[internalIndex] : ''
+        const path = internalPreviews.length > 0 ? internalPreviews[internalIndex].path : ''
         const urlParam = path ? `&internal_path=${encodeURIComponent(path)}` : ''
 
         setLoading(true)
@@ -303,7 +310,7 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
 
                 // If we didn't have the list yet, we might find out which index we are at
                 if (internalPreviews.length > 0 && actualInternalPath) {
-                    const idx = internalPreviews.indexOf(actualInternalPath)
+                    const idx = internalPreviews.findIndex(p => p.path === actualInternalPath)
                     if (idx !== -1 && idx !== internalIndex) {
                         setInternalIndex(idx)
                     }
@@ -327,14 +334,60 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
         fetch(`${apiHost}/api/open?path=${encodeURIComponent(file.path)}&mode=launch`)
     }
 
+    const [showInternalList, setShowInternalList] = useState(false)
+
     return (
         <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4"
-            onClick={onClose}
+            onClick={() => { if (previewData?.type !== 'model') onClose(); }}
         >
+            {/* Internal File Selector Modal */}
+            <AnimatePresence>
+                {showInternalList && (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                        className="absolute bottom-32 left-1/2 -translate-x-1/2 w-full max-w-lg bg-[#111114]/90 backdrop-blur-2xl border border-white/10 rounded-3xl z-[150] shadow-2xl p-6 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-4 px-2">
+                            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-blue-400">Select Internal File</h3>
+                            <button
+                                onClick={() => setShowInternalList(false)}
+                                className="p-2 hover:bg-white/10 rounded-full text-gray-400 transition-all"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div className="max-h-[40vh] overflow-y-auto space-y-1 pr-2 custom-scrollbar">
+                            {internalPreviews.map((p, idx) => (
+                                <button
+                                    key={p.path}
+                                    onClick={() => {
+                                        setInternalIndex(idx)
+                                        setShowInternalList(false)
+                                    }}
+                                    className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left ${internalIndex === idx ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'hover:bg-white/5 text-gray-400 hover:text-white'}`}
+                                >
+                                    <div className={`p-1.5 rounded-lg ${internalIndex === idx ? 'bg-white/20' : 'bg-white/5'}`}>
+                                        {p.path.toLowerCase().endsWith('.stl') || p.path.toLowerCase().endsWith('.obj') ? <Box className="w-3.5 h-3.5" /> : <ImageIcon className="w-3.5 h-3.5" />}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-[11px] font-bold truncate">{p.path}</p>
+                                        <p className="text-[9px] opacity-60 font-mono">{formatBytes(p.size)}</p>
+                                    </div>
+                                    {internalIndex === idx && <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
+                                </button>
+                            ))}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Navigation Layer - Higher z-index to stay on top */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[120]">
                 <div className="w-full max-w-[1250px] flex justify-between px-4 md:px-8 pointer-events-auto">
@@ -372,7 +425,10 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                 {loading ? (
                     <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
                 ) : previewData?.type === 'model' ? (
-                    <div className="w-full h-full pointer-events-auto bg-gray-900 rounded-3xl overflow-hidden border border-white/10 shadow-2xl">
+                    <div
+                        className="w-full h-full pointer-events-auto bg-gray-900 rounded-3xl overflow-hidden border border-white/10 shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
                         <STLViewer url={previewData.url} />
                     </div>
                 ) : (
@@ -413,12 +469,15 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                             >
                                 <ChevronLeft className="w-4 h-4" />
                             </button>
-                            <div className="flex items-center gap-2">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setShowInternalList(!showInternalList); }}
+                                className={`flex items-center gap-2 px-3 py-1 rounded-xl transition-all ${showInternalList ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'hover:bg-white/10 text-gray-300'}`}
+                            >
                                 <Images className="w-3.5 h-3.5 text-blue-400" />
-                                <span className="text-[10px] font-bold text-gray-300">
+                                <span className="text-[10px] font-bold uppercase tracking-tighter">
                                     {internalIndex + 1} / {internalPreviews.length} INTERNAL FILES
                                 </span>
-                            </div>
+                            </button>
                             <button
                                 onClick={(e) => { e.stopPropagation(); setInternalIndex(i => (i + 1) % internalPreviews.length) }}
                                 className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all"
@@ -441,6 +500,11 @@ export default function GalleryPage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [gridHeight, setGridHeight] = useState(0)
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+    const [sortField, setSortField] = useState<'name' | 'size' | 'mod_time'>('name')
+    const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
+    const [filterExt, setFilterExt] = useState<'all' | 'zip' | 'rar' | '7z' | 'stl' | 'obj'>('all')
+    const [page, setPage] = useState(1)
+    const PAGE_SIZE = 60
 
     // Calculate grid height to fit exactly 3 rows
     useEffect(() => {
@@ -477,18 +541,47 @@ export default function GalleryPage() {
         fetchFiles()
     }, [fetchFiles])
 
-    // Filter files based on search query
+    // Filter and Sort files
     useEffect(() => {
-        if (searchQuery.trim() === '') {
-            setFilteredFiles(files)
-        } else {
+        let result = [...files]
+
+        // 1. Filter by Search Query
+        if (searchQuery.trim() !== '') {
             const query = searchQuery.toLowerCase()
-            setFilteredFiles(files.filter(file =>
+            result = result.filter(file =>
                 file.name.toLowerCase().includes(query) ||
                 file.path.toLowerCase().includes(query)
-            ))
+            )
         }
-    }, [searchQuery, files])
+
+        // 2. Filter by Extension
+        if (filterExt !== 'all') {
+            result = result.filter(file =>
+                file.name.toLowerCase().endsWith('.' + filterExt)
+            )
+        }
+
+        // 3. Sort
+        result.sort((a, b) => {
+            let valA = a[sortField]
+            let valB = b[sortField]
+
+            if (sortField === 'name') {
+                valA = (valA as string).toLowerCase()
+                valB = (valB as string).toLowerCase()
+            } else if (sortField === 'mod_time') {
+                valA = new Date(valA as string).getTime()
+                valB = new Date(valB as string).getTime()
+            }
+
+            if (valA < valB) return sortOrder === 'asc' ? -1 : 1
+            if (valA > valB) return sortOrder === 'asc' ? 1 : -1
+            return 0
+        })
+
+        setFilteredFiles(result)
+        setPage(1) // Reset to first page when filters change
+    }, [searchQuery, filterExt, sortField, sortOrder, files])
 
     const handlePrev = () => {
         if (selectedIndex === null) return
@@ -558,8 +651,8 @@ export default function GalleryPage() {
                     </div>
                 </header>
 
-                <div className="mb-8">
-                    <div className="relative group max-w-2xl">
+                <div className="mb-8 flex flex-col md:flex-row gap-6 items-end md:items-center">
+                    <div className="relative group flex-1 w-full">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-blue-500 transition-colors" />
                         <input
                             type="text"
@@ -569,15 +662,61 @@ export default function GalleryPage() {
                             className="w-full bg-white/5 border border-white/5 rounded-2xl py-4 pl-12 pr-4 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
                         />
                     </div>
+
+                    <div className="flex items-center gap-2 bg-white/5 rounded-2xl p-1.5 border border-white/10 self-stretch md:self-auto overflow-x-auto">
+                        {['all', 'zip', 'rar', '7z', 'stl', 'obj'].map(ext => (
+                            <button
+                                key={ext}
+                                onClick={() => setFilterExt(ext as any)}
+                                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${filterExt === ext ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-500 hover:text-white'}`}
+                            >
+                                {ext}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-between mb-8 px-2">
+                    <div className="flex items-center gap-2">
+                        <ArrowDownWideNarrow className="w-4 h-4 text-gray-500" />
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Sort by:</span>
+                        <div className="flex gap-2 ml-2">
+                            {[
+                                { id: 'name', icon: sortOrder === 'asc' ? ArrowUpAZ : ArrowDownAZ, label: 'Name' },
+                                { id: 'size', icon: sortOrder === 'asc' ? ArrowUp01 : ArrowDown01, label: 'Size' },
+                                { id: 'mod_time', icon: Clock, label: 'Date' }
+                            ].map(item => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => {
+                                        if (sortField === item.id) {
+                                            setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+                                        } else {
+                                            setSortField(item.id as any)
+                                            setSortOrder('asc')
+                                        }
+                                    }}
+                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all border ${sortField === item.id ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'bg-transparent border-white/5 text-gray-500 hover:bg-white/5'}`}
+                                >
+                                    <item.icon className="w-3 h-3" />
+                                    <span className="text-[10px] font-bold uppercase tracking-tighter">{item.label}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                        Showing <span className="text-white">{filteredFiles.length}</span> / {files.length} archives
+                    </div>
                 </div>
 
                 <div
                     className="grid grid-cols-3 gap-6"
                     style={{
-                        gridAutoRows: gridHeight > 0 ? `${gridHeight - 24}px` : 'auto'
+                        gridAutoRows: gridHeight > 0 ? `${gridHeight - 32}px` : 'auto'
                     }}
                 >
-                    {filteredFiles.map((file, idx) => (
+                    {filteredFiles.slice(0, page * PAGE_SIZE).map((file, idx) => (
                         <GalleryItem
                             key={file.path}
                             file={file}
@@ -587,6 +726,20 @@ export default function GalleryPage() {
                         />
                     ))}
                 </div>
+
+                {filteredFiles.length > page * PAGE_SIZE && (
+                    <div className="mt-12 mb-20 flex justify-center">
+                        <button
+                            onClick={() => setPage(p => p + 1)}
+                            className="px-8 py-4 bg-white/5 hover:bg-blue-600 border border-white/10 rounded-2xl text-sm font-black uppercase tracking-widest transition-all shadow-xl hover:shadow-blue-600/20 group flex items-center gap-3"
+                        >
+                            <span>Load More Archives</span>
+                            <span className="text-[10px] text-gray-500 group-hover:text-blue-200">
+                                ({filteredFiles.length - page * PAGE_SIZE} remaining)
+                            </span>
+                        </button>
+                    </div>
+                )}
 
                 <AnimatePresence>
                     {selectedIndex !== null && (

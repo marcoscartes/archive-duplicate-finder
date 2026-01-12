@@ -118,16 +118,10 @@ func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 func getArchiveType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
-	case ".zip":
-		return "zip"
-	case ".rar":
-		return "rar"
-	case ".7z":
-		return "7z"
-	case ".stl":
-		return "stl"
-	case ".obj":
-		return "obj"
+	case ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab":
+		return "archive"
+	case ".stl", ".obj", ".3ds", ".fbx", ".blend", ".step", ".stp", ".iges", ".igs", ".ply", ".off", ".3mf", ".glb", ".gltf":
+		return "model"
 	default:
 		return ""
 	}
@@ -154,9 +148,8 @@ func PrintFileStats(files []ArchiveFile) {
 		totalSize += file.Size
 	}
 
-	fmt.Printf("  • ZIP: %d files\n", stats["zip"])
-	fmt.Printf("  • RAR: %d files\n", stats["rar"])
-	fmt.Printf("  • 7Z: %d files\n", stats["7z"])
+	fmt.Printf("  • Archives: %d files\n", stats["archive"])
+	fmt.Printf("  • 3D Models: %d files\n", stats["model"])
 	fmt.Printf("  • Total size: %s\n", formatBytes(totalSize))
 }
 
