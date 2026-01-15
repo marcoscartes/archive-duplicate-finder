@@ -103,6 +103,14 @@ function PreviewImage({ path }: { path: string }) {
   )
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
 function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void }) {
   const [isHovered, setIsHovered] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -154,7 +162,12 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
         <Box className="w-5 h-5" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-bold text-gray-200 truncate">{file.name}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-bold text-gray-200 truncate">{file.name}</p>
+          <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-white/5 text-gray-500 uppercase tracking-tighter">
+            {formatBytes(file.size)}
+          </span>
+        </div>
         <p className="text-[10px] text-gray-500 font-medium truncate opacity-60 uppercase tracking-tighter">{file.path}</p>
       </div>
       <div className="flex gap-2">
@@ -242,6 +255,8 @@ export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(50)
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
+  const [isEditingPage, setIsEditingPage] = useState(false)
+  const [tempPage, setTempPage] = useState('')
 
   // Global error listener for debugging
   useEffect(() => {
@@ -516,14 +531,14 @@ export default function Dashboard() {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 mb-16 relative z-10 w-full">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-10 relative z-10 w-full">
           {stats.map((stat, i) => (
             <div key={stat.label} className="relative w-full">
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className={`glass-card p-8 rounded-[2rem] relative overflow-hidden group hover:scale-[1.02] transition-all cursor-pointer h-full min-h-[160px] flex flex-col gap-6 ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar')
+                className={`glass-card p-5 rounded-[1.5rem] relative overflow-hidden group hover:scale-[1.02] transition-all cursor-pointer h-full min-h-[120px] flex flex-col justify-between ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar')
                   ? 'border-blue-500/50 shadow-lg shadow-blue-500/10'
                   : 'border-white/5'
                   }`}
@@ -533,14 +548,14 @@ export default function Dashboard() {
                 }}
               >
                 <div className={`absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-blue-500/0 via-blue-500/50 to-blue-500/0 group-hover:via-blue-400 transition-all`} />
-                <div className="flex justify-between items-start">
-                  <div className="p-3 rounded-2xl bg-white/5">
-                    <stat.icon className={`w-8 h-8 ${stat.color} opacity-90`} />
+                <div className="flex justify-between items-start w-full">
+                  <div className="flex items-center gap-4">
+                    <div className="p-2 rounded-xl bg-white/5">
+                      <stat.icon className={`w-6 h-6 ${stat.color} opacity-90`} />
+                    </div>
+                    <div className="text-4xl font-black text-white glow-text tracking-tight break-all">{stat.value}</div>
                   </div>
-                  <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-1 text-right max-w-[50%] leading-tight">{stat.label}</div>
-                </div>
-                <div>
-                  <div className="text-5xl font-black text-white glow-text tracking-tight break-all">{stat.value}</div>
+                  <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1 text-right max-w-[40%] leading-tight">{stat.label}</div>
                 </div>
               </motion.div>
             </div>
@@ -571,8 +586,50 @@ export default function Dashboard() {
                 </div>
                 <div className="flex-1" />
                 {currentItems.length > 0 && (
-                  <div className="text-xs font-bold text-gray-400 uppercase tracking-wide bg-white/5 px-4 py-2 rounded-xl border border-white/5 whitespace-nowrap">
-                    Page <span className="text-white">{currentPage}</span> of {totalPages} <span className="opacity-50 mx-2">|</span> {currentItems.length} Groups
+                  <div
+                    className="text-xs font-bold text-gray-400 uppercase tracking-wide bg-white/5 px-4 py-2 rounded-xl border border-white/5 whitespace-nowrap cursor-pointer hover:bg-white/10 transition-all flex items-center group"
+                    title="Click to jump to page"
+                    onClick={() => {
+                      setIsEditingPage(true);
+                      setTempPage(currentPage.toString());
+                    }}
+                  >
+                    {isEditingPage ? (
+                      <div className="flex items-center gap-1 px-1">
+                        <span className="opacity-50">PAGE</span>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={tempPage}
+                          onChange={(e) => setTempPage(e.target.value.replace(/\D/g, ''))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const p = parseInt(tempPage);
+                              if (!isNaN(p) && p > 0 && p <= totalPages) {
+                                handlePageChange(p);
+                              }
+                              setIsEditingPage(false);
+                            } else if (e.key === 'Escape') {
+                              setIsEditingPage(false);
+                            }
+                          }}
+                          onBlur={() => {
+                            const p = parseInt(tempPage);
+                            if (!isNaN(p) && p > 0 && p <= totalPages) {
+                              handlePageChange(p);
+                            }
+                            setIsEditingPage(false);
+                          }}
+                          className="w-10 bg-blue-500/20 border-none outline-none text-white text-center rounded py-0 px-1 font-black"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <span className="opacity-50">OF {totalPages}</span>
+                      </div>
+                    ) : (
+                      <div className="px-4 py-2">
+                        Page <span className="text-white group-hover:text-blue-400 transition-colors">{currentPage}</span> of {totalPages} <span className="opacity-50 mx-2">|</span> {currentItems.length} Groups
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -306,14 +306,17 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
 
     // Fetch list of previews in this archive
     useEffect(() => {
+        const isArchive = file.path.toLowerCase().match(/\.(zip|rar|7z)$/)
+        if (!isArchive) {
+            setInternalPreviews([])
+            return
+        }
+
         fetch(`${apiHost}/api/list-previews?path=${encodeURIComponent(file.path)}`)
             .then(res => res.json())
             .then(data => {
                 if (data.previews && data.previews.length > 0) {
                     setInternalPreviews(data.previews)
-                    // The default preview might be any of these, let's start with index 0
-                    // unless we want to find the one that FindPreviewInArchive returns.
-                    // For simplicity, let's just use the first internal preview or the logic below.
                 }
             })
             .catch(err => console.error("Failed to list previews:", err))
@@ -478,7 +481,7 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
                         className="w-full h-full pointer-events-auto bg-gray-900 rounded-3xl overflow-hidden border border-white/10 shadow-2xl"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <STLViewer url={previewData.url} />
+                        <STLViewer url={previewData.url} fileName={previewData.internalPath || file.name} />
                     </div>
                 ) : previewData?.type === 'video' ? (
                     <div

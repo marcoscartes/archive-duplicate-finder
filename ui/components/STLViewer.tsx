@@ -5,29 +5,45 @@ import { Canvas, useThree } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera, Environment } from '@react-three/drei'
 import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 
-function Model({ url }: { url: string }) {
+function Model({ url, fileName }: { url: string, fileName?: string }) {
     const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
     const [error, setError] = useState<string | null>(null)
     const meshRef = useRef<THREE.Mesh>(null)
     const { camera } = useThree()
 
     useEffect(() => {
-        const loader = new STLLoader()
+        const isObj = fileName?.toLowerCase().endsWith('.obj') || url.toLowerCase().includes('.obj');
 
-        // Load the STL file
+        const loader = isObj ? new OBJLoader() : new STLLoader();
+
         loader.load(
             url,
-            (loadedGeometry) => {
-                console.log('STL loaded successfully', loadedGeometry)
+            (object) => {
+                let loadedGeometry: THREE.BufferGeometry;
 
-                // Center the geometry
+                if (isObj) {
+                    // For OBJ, we get a Group/Object3D, we need to extract the geometry
+                    const group = object as THREE.Group;
+                    let foundGeometry: THREE.BufferGeometry | null = null;
+                    group.traverse((child) => {
+                        if (child instanceof THREE.Mesh && !foundGeometry) {
+                            foundGeometry = child.geometry;
+                        }
+                    });
+                    if (!foundGeometry) {
+                        setError('No geometry found in OBJ');
+                        return;
+                    }
+                    loadedGeometry = foundGeometry;
+                } else {
+                    loadedGeometry = object as THREE.BufferGeometry;
+                }
+
+                console.log('Model loaded successfully', loadedGeometry)
                 loadedGeometry.center()
-
-                // Compute normals for proper lighting
                 loadedGeometry.computeVertexNormals()
-
-                // Compute bounding box
                 loadedGeometry.computeBoundingBox()
                 const boundingBox = loadedGeometry.boundingBox
 
@@ -35,22 +51,16 @@ function Model({ url }: { url: string }) {
                     const size = new THREE.Vector3()
                     boundingBox.getSize(size)
                     const maxDim = Math.max(size.x, size.y, size.z)
-
-                    // Position camera based on model size
                     const distance = maxDim * 2
                     camera.position.set(distance, distance, distance)
                     camera.lookAt(0, 0, 0)
-
-                    console.log('Model size:', size, 'Max dimension:', maxDim)
                 }
 
                 setGeometry(loadedGeometry)
             },
-            (progress) => {
-                console.log('Loading progress:', (progress.loaded / progress.total * 100).toFixed(2) + '%')
-            },
+            undefined,
             (err) => {
-                console.error('Error loading STL:', err)
+                console.error('Error loading model:', err)
                 setError('Failed to load 3D model')
             }
         )
@@ -92,7 +102,7 @@ function Model({ url }: { url: string }) {
     )
 }
 
-export default function STLViewer({ url }: { url: string }) {
+export default function STLViewer({ url, fileName }: { url: string, fileName?: string }) {
     const [modelUrl, setModelUrl] = useState<string>('')
 
     useEffect(() => {
@@ -161,7 +171,7 @@ export default function STLViewer({ url }: { url: string }) {
                 <gridHelper args={[20, 20, '#444444', '#222222']} position={[0, -0.01, 0]} />
 
                 {/* Model */}
-                <Model url={modelUrl} />
+                <Model url={modelUrl} fileName={fileName} />
 
                 {/* Environment for better reflections */}
                 <Environment preset="city" />
@@ -178,7 +188,9 @@ export default function STLViewer({ url }: { url: string }) {
             {/* Model info */}
             <div className="absolute bottom-4 right-4 bg-black/70 backdrop-blur-sm rounded-lg p-3 text-xs text-gray-300 border border-white/10">
                 <p className="font-bold text-blue-400">Model Info</p>
-                <p className="text-[10px] mt-1 opacity-60">STL Format</p>
+                <p className="text-[10px] mt-1 opacity-60">
+                    {url.toLowerCase().includes('.obj') ? 'OBJ Format' : 'STL Format'}
+                </p>
             </div>
         </div>
     )
