@@ -13,6 +13,8 @@ body {
   color: var(--foreground);
   font-family: 'Inter', sans-serif;
   overflow-x: hidden;
+  /* Prevent layout shift between pages/states with different content heights */
+  overflow-y: scroll;
 }
 
 .glass-card {

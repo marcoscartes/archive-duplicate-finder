@@ -159,20 +159,28 @@ func (s *Server) Start() error {
 			}
 
 			var found bool
-			if s.cache != nil {
+			if s.cache != nil && c.Query("type") != "model" {
 				internalPath, found = s.cache.GetPreviewPath(path, modTime)
 			}
 
 			if !found {
 				// Archive without internal path: Find the best preview filename efficiently
-				filename, err := archive.FindPreviewPathInArchive(path)
+				var filename string
+				var err error
+
+				if c.Query("type") == "model" {
+					filename, err = archive.FindBestSTLInArchive(path)
+				} else {
+					filename, err = archive.FindPreviewPathInArchive(path)
+				}
+
 				if err != nil {
 					return c.Status(404).SendString(err.Error())
 				}
 				internalPath = filename
 
-				// Save to cache
-				if s.cache != nil {
+				// Save to cache (only if standard preview)
+				if s.cache != nil && c.Query("type") != "model" {
 					s.cache.PutPreviewPath(path, internalPath, modTime)
 				}
 			}

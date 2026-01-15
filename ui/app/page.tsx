@@ -241,6 +241,7 @@ export default function Dashboard() {
   const [viewMode, setViewMode] = useState<'size' | 'similar'>('size')
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(50)
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([])
 
   // Global error listener for debugging
   useEffect(() => {
@@ -410,35 +411,35 @@ export default function Dashboard() {
   const fileTypes = ['all', 'zip', 'rar', '7z', 'stl']
 
   return (
-    <div className="min-h-screen bg-[#0a0a0c] text-slate-200 p-4 md:p-8">
-      <div className="max-w-[1000px] mx-auto">
+    <div className="min-h-screen bg-[#0a0a0c] text-slate-200 p-8 md:p-12 flex flex-col items-center">
+      <div className="w-full max-w-[1700px] transition-all duration-500 ease-in-out">
         {/* Header */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-4">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-16 gap-6">
           <div>
-            <h1 className="text-4xl font-black tracking-tight flex items-center gap-3">
+            <h1 className="text-5xl font-black tracking-tight flex items-center gap-4">
               <span className="bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">ARCHIVE</span>
               <span className="text-white">FINDER</span>
-              <div className="px-2 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-[10px] text-blue-400 uppercase tracking-widest font-bold">Intelligence v1.2.0</div>
+              <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-md text-xs text-blue-400 uppercase tracking-widest font-bold">Intelligence v1.2.0</div>
             </h1>
-            <p className="text-gray-500 mt-1 font-medium tracking-wide">3D Asset Deduplication & Management Dashboard</p>
+            <p className="text-gray-500 mt-2 font-medium tracking-wide text-lg">3D Asset Deduplication & Management Dashboard</p>
           </div>
           <div className="flex gap-4">
             <div className="flex items-center gap-4">
               <Link href="/gallery">
-                <button className="px-4 py-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-xl text-xs font-bold text-white transition-all border border-blue-500/20 shadow-lg shadow-blue-500/20 flex items-center gap-2">
-                  <Grid3x3 className="w-4 h-4" />
+                <button className="px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-2xl text-sm font-bold text-white transition-all border border-blue-500/20 shadow-lg shadow-blue-500/20 flex items-center gap-2">
+                  <Grid3x3 className="w-5 h-5" />
                   Gallery View
                 </button>
               </Link>
               <button
                 onClick={requestNotificationPermission}
-                className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-medium text-gray-400 transition-all border border-white/10"
+                className="px-6 py-3 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-medium text-gray-400 transition-all border border-white/10"
               >
                 🔔 Enable Notifications
               </button>
-              <div className="flex items-center gap-2 px-4 py-2 bg-white/5 rounded-xl border border-white/10">
-                <div className={`w-2 h-2 rounded-full ${data?.status === 'finished' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-yellow-500 animate-pulse'}`} />
-                <span className="text-xs font-medium text-gray-300 uppercase tracking-widest">
+              <div className="flex items-center gap-3 px-6 py-3 bg-white/5 rounded-2xl border border-white/10">
+                <div className={`w-2.5 h-2.5 rounded-full ${data?.status === 'finished' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-yellow-500 animate-pulse'}`} />
+                <span className="text-sm font-medium text-gray-300 uppercase tracking-widest">
                   {data?.status || 'Analyzing'}
                 </span>
               </div>
@@ -447,169 +448,199 @@ export default function Dashboard() {
         </header>
 
         {/* Filter Bar */}
-        <div className="flex flex-col md:flex-row gap-4 mb-8">
-          <div className="relative flex-1 group">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-blue-500 transition-colors" />
+        <div className="flex flex-wrap items-center gap-6 mb-12 w-full">
+          <div className="relative flex-grow min-w-[320px] group">
+            <Search className="absolute left-6 top-1/2 -translate-y-1/2 w-6 h-6 text-gray-500 group-focus-within:text-blue-500 transition-colors" />
             <input
               type="text"
               placeholder="Search by filename..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white/5 border border-white/5 rounded-2xl py-4 pl-12 pr-4 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
+              className="w-full bg-white/5 border border-white/5 rounded-3xl py-5 pl-16 pr-6 text-base font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
             />
           </div>
-          <div className="flex gap-2 bg-white/5 p-1 rounded-2xl border border-white/5">
-            <button
-              onClick={() => setViewMode('size')}
-              className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${viewMode === 'size'
-                ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
-                : 'text-gray-500 hover:text-gray-300'
-                }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              Size Matches
-            </button>
-            <button
-              onClick={() => setViewMode('similar')}
-              className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${viewMode === 'similar'
-                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20'
-                : 'text-gray-500 hover:text-gray-300'
-                }`}
-            >
-              <FileText className="w-3.5 h-3.5" />
-              Similar Names
-            </button>
-          </div>
-          <div className="relative">
-            <select
-              value={itemsPerPage}
-              onChange={(e) => setItemsPerPage(Number(e.target.value))}
-              className="appearance-none bg-white/5 border border-white/5 rounded-2xl py-4 pl-6 pr-12 text-[10px] font-black uppercase tracking-widest text-gray-400 focus:outline-none focus:border-blue-500/50 transition-all cursor-pointer"
-            >
-              <option value={10}>10 Per Page</option>
-              <option value={20}>20 Per Page</option>
-              <option value={50}>50 Per Page</option>
-              <option value={100}>100 Per Page</option>
-            </select>
-            <Filter className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600 pointer-events-none" />
-          </div>
-          <div className="flex gap-2">
-            {fileTypes.map(type => (
+
+          <div className="flex flex-wrap gap-3 items-center flex-grow sm:flex-grow-0">
+            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5">
               <button
-                key={type}
-                onClick={() => setFileType(type)}
-                className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${fileType === type
+                onClick={() => setViewMode('size')}
+                className={`px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center gap-3 whitespace-nowrap ${viewMode === 'size'
                   ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
-                  : 'bg-white/5 text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                  : 'text-gray-500 hover:text-gray-300'
                   }`}
               >
-                {type}
+                <Layers className="w-5 h-5" />
+                Size Matches
               </button>
-            ))}
+              <button
+                onClick={() => setViewMode('similar')}
+                className={`px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center gap-3 whitespace-nowrap ${viewMode === 'similar'
+                  ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20'
+                  : 'text-gray-500 hover:text-gray-300'
+                  }`}
+              >
+                <FileText className="w-5 h-5" />
+                Similar Names
+              </button>
+            </div>
+
+            <div className="relative flex-grow sm:flex-grow-0">
+              <select
+                value={itemsPerPage}
+                onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                className="appearance-none w-full bg-white/5 border border-white/5 rounded-3xl px-8 py-4 text-sm font-bold uppercase tracking-wide text-gray-400 focus:outline-none focus:border-blue-500/50 transition-all cursor-pointer min-w-[160px]"
+              >
+                <option value={10}>10 Per Page</option>
+                <option value={20}>20 Per Page</option>
+                <option value={50}>50 Per Page</option>
+                <option value={100}>100 Per Page</option>
+              </select>
+              <Filter className="absolute right-5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600 pointer-events-none" />
+            </div>
+
+            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5 h-full overflow-x-auto max-w-full">
+              {fileTypes.map(type => (
+                <button
+                  key={type}
+                  onClick={() => setFileType(type)}
+                  className={`px-5 py-3 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all whitespace-nowrap ${fileType === type
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                    }`}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 mb-16 relative z-10 w-full">
           {stats.map((stat, i) => (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.1 }}
-              className={`glass-card p-6 rounded-3xl relative overflow-hidden group hover:scale-[1.02] transition-all cursor-pointer ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar')
-                ? 'border-blue-500/50 shadow-lg shadow-blue-500/10'
-                : 'border-white/5'
-                }`}
-              onClick={() => {
-                if (stat.label === 'Size Groups') setViewMode('size')
-                if (stat.label === 'Similar Names') setViewMode('similar')
-              }}
-            >
-              <div className={`absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-blue-500/0 via-blue-500/50 to-blue-500/0 group-hover:via-blue-400 transition-all`} />
-              <div className="flex justify-between items-center mb-4">
-                <stat.icon className={`w-6 h-6 ${stat.color} opacity-80`} />
-                <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center">
-                  <div className="w-1.5 h-1.5 rounded-full bg-white/20" />
+            <div key={stat.label} className="relative w-full">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.1 }}
+                className={`glass-card p-8 rounded-[2rem] relative overflow-hidden group hover:scale-[1.02] transition-all cursor-pointer h-full min-h-[160px] flex flex-col gap-6 ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar')
+                  ? 'border-blue-500/50 shadow-lg shadow-blue-500/10'
+                  : 'border-white/5'
+                  }`}
+                onClick={() => {
+                  if (stat.label === 'Size Groups') setViewMode('size')
+                  if (stat.label === 'Similar Clusters') setViewMode('similar')
+                }}
+              >
+                <div className={`absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-blue-500/0 via-blue-500/50 to-blue-500/0 group-hover:via-blue-400 transition-all`} />
+                <div className="flex justify-between items-start">
+                  <div className="p-3 rounded-2xl bg-white/5">
+                    <stat.icon className={`w-8 h-8 ${stat.color} opacity-90`} />
+                  </div>
+                  <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-1 text-right max-w-[50%] leading-tight">{stat.label}</div>
                 </div>
-              </div>
-              <div className="text-3xl font-black text-white glow-text">{stat.value}</div>
-              <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">{stat.label}</div>
-            </motion.div>
+                <div>
+                  <div className="text-5xl font-black text-white glow-text tracking-tight break-all">{stat.value}</div>
+                </div>
+              </motion.div>
+            </div>
           ))}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 w-full">
           {/* Left Column: Listings */}
-          <div className="lg:col-span-8 space-y-8">
+          <div className="lg:col-span-8 xl:col-span-9 space-y-6">
 
             {/* Section: Results */}
-            <section>
-              <div className="flex items-center gap-4 mb-6">
-                <div className={`p-2 rounded-xl ${viewMode === 'size' ? 'bg-blue-500/20' : 'bg-cyan-500/20'}`}>
+            <section className="w-full">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-6 pb-4 border-b border-white/5">
+                <div className={`p-3 rounded-xl ${viewMode === 'size' ? 'bg-blue-500/20' : 'bg-cyan-500/20'}`}>
                   {viewMode === 'size' ? (
-                    <Layers className="w-5 h-5 text-blue-400" />
+                    <Layers className="w-6 h-6 text-blue-400" />
                   ) : (
-                    <FileText className="w-5 h-5 text-cyan-400" />
+                    <FileText className="w-6 h-6 text-cyan-400" />
                   )}
                 </div>
-                <h2 className="text-xl font-bold text-white uppercase tracking-widest">
-                  {viewMode === 'size' ? 'Identical Size Groups' : 'Similarity Hits'}
-                </h2>
-                <div className="flex-1 h-px bg-white/5" />
+                <div>
+                  <h2 className="text-2xl font-black text-white uppercase tracking-wide">
+                    {viewMode === 'size' ? 'Identical Size Groups' : 'Similarity Hits'}
+                  </h2>
+                  <p className="text-xs text-gray-500 font-medium mt-1">
+                    Review and manage detected duplicate sets
+                  </p>
+                </div>
+                <div className="flex-1" />
                 {currentItems.length > 0 && (
-                  <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest bg-white/5 px-3 py-1 rounded-full">
-                    Page {currentPage} of {totalPages} ({currentItems.length} Total)
+                  <div className="text-xs font-bold text-gray-400 uppercase tracking-wide bg-white/5 px-4 py-2 rounded-xl border border-white/5 whitespace-nowrap">
+                    Page <span className="text-white">{currentPage}</span> of {totalPages} <span className="opacity-50 mx-2">|</span> {currentItems.length} Groups
                   </div>
                 )}
               </div>
 
               <div className="space-y-4">
                 {viewMode === 'size' ? (
-                  (paginatedItems as SizeGroup[]).map((group, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="glass-card p-4 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-all"
-                    >
-                      <div className="flex justify-between items-center mb-4">
-                        <span className="text-[10px] font-black text-blue-500/60 uppercase tracking-widest">Group {((currentPage - 1) * itemsPerPage) + i + 1}</span>
-                        <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
-                          Weight: {(group.size / (1024 * 1024)).toFixed(1)} MB
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        {group.files.map((file) => (
-                          <FileItem key={file.path} file={file} onRefresh={fetchData} />
-                        ))}
-                      </div>
-                    </motion.div>
-                  ))
+                  (paginatedItems as SizeGroup[]).map((group, i) => {
+                    const isSelected = selectedFiles.length > 0 && group.files.length > 0 && selectedFiles[0] === group.files[0].path
+                    return (
+                      <motion.div
+                        key={i}
+                        layoutId={`group-${viewMode}-${i}`} // Smooth layout transitions
+                        onClick={() => setSelectedFiles(group.files.map(f => f.path))}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className={`glass-card p-4 rounded-2xl border transition-all cursor-pointer ${isSelected
+                          ? 'border-blue-500 shadow-lg shadow-blue-500/20 bg-blue-500/5'
+                          : 'border-white/5 hover:border-blue-500/30'
+                          }`}
+                      >
+                        <div className="flex justify-between items-center mb-4">
+                          <span className={`text-[10px] font-black uppercase tracking-widest transition-colors ${isSelected ? 'text-blue-400' : 'text-blue-500/60'}`}>
+                            Group {((currentPage - 1) * itemsPerPage) + i + 1}
+                          </span>
+                          <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
+                            Weight: {(group.size / (1024 * 1024)).toFixed(1)} MB
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {group.files.map((file) => (
+                            <FileItem key={file.path} file={file} onRefresh={fetchData} />
+                          ))}
+                        </div>
+                      </motion.div>
+                    )
+                  })
                 ) : (
-                  (paginatedItems as SimilarityGroup[]).map((group, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="glass-card p-4 rounded-2xl border border-white/5 hover:border-cyan-500/30 transition-all bg-gradient-to-r from-cyan-900/10 to-transparent"
-                    >
-                      <div className="flex justify-between items-center mb-4">
-                        <span className="text-[10px] font-black text-cyan-500/60 uppercase tracking-widest truncate max-w-[70%]">
-                          Cluster: {group.base_name || "Unknown"}
-                        </span>
-                        <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
-                          {group.files.length} Files
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        {/* Sort by size descending within group for better visibility */}
-                        {[...group.files].sort((a, b) => b.size - a.size).map((file) => (
-                          <FileItem key={file.path} file={file} onRefresh={fetchData} />
-                        ))}
-                      </div>
-                    </motion.div>
-                  ))
+                  (paginatedItems as SimilarityGroup[]).map((group, i) => {
+                    const isSelected = selectedFiles.length > 0 && group.files.length > 0 && selectedFiles[0] === group.files[0].path
+                    return (
+                      <motion.div
+                        key={i}
+                        layoutId={`group-${viewMode}-${i}`}
+                        onClick={() => setSelectedFiles(group.files.map(f => f.path))}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={`glass-card p-4 rounded-2xl border transition-all cursor-pointer ${isSelected
+                          ? 'border-cyan-500 shadow-lg shadow-cyan-500/20 bg-cyan-500/5'
+                          : 'border-white/5 hover:border-cyan-500/30 bg-gradient-to-r from-cyan-900/10 to-transparent'
+                          }`}
+                      >
+                        <div className="flex justify-between items-center mb-4">
+                          <span className={`text-[10px] font-black uppercase tracking-widest truncate max-w-[70%] transition-colors ${isSelected ? 'text-cyan-400' : 'text-cyan-500/60'}`}>
+                            Cluster: {group.base_name || "Unknown"}
+                          </span>
+                          <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
+                            {group.files.length} Files
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {/* Sort by size descending within group for better visibility */}
+                          {[...group.files].sort((a, b) => b.size - a.size).map((file) => (
+                            <FileItem key={file.path} file={file} onRefresh={fetchData} />
+                          ))}
+                        </div>
+                      </motion.div>
+                    )
+                  })
                 )}
 
                 {currentItems.length === 0 && (
@@ -674,8 +705,8 @@ export default function Dashboard() {
           </div>
 
           {/* Right Column: Actions and Intelligence */}
-          <div className="lg:col-span-4 space-y-8">
-            <ModelPreview />
+          <div className="lg:col-span-4 xl:col-span-3 space-y-8">
+            <ModelPreview selectedFiles={selectedFiles} />
 
             <div className="glass-card p-6 rounded-3xl border border-blue-500/20 sticky top-8">
               <h3 className="text-lg font-black mb-6 text-white uppercase tracking-widest flex items-center gap-3">

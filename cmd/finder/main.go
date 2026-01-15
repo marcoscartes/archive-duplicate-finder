@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -37,7 +39,6 @@ type Config struct {
 	LeaveRef    bool   // Leave a .txt link to the original
 	Web         bool   // Start web dashboard
 	Port        int    // Web server port
-	GPUTurbo    bool   // Experimental high-performance mode
 	Debug       bool   // Enable detailed debug logging
 	RunStep3    bool   // Explicitly run Step 3 (Similarity Check)
 	Version     bool   // Show version and exit
@@ -133,9 +134,7 @@ func main() {
 			// Check cache (TODO: Update cache logic for groups if needed, for now skip cache for groups to ensure correctness)
 			// if cache != nil ... (Skip mostly because struct changed)
 
-			if config.GPUTurbo {
-				log.Printf("🚀 TURBO MODE: Maximizing parallel compute throughput...")
-			}
+			log.Printf("🚀 Optimized Clustering Engine: Active (O(N) Speed)")
 
 			// Define progress callback
 			onProgress := func(p float64) {
@@ -149,7 +148,7 @@ func main() {
 			}
 
 			// Use new Clustering Algorithm (O(N)) with Progress
-			simGroups := similarity.FindSimilarGroups(files, config.Threshold, config.GPUTurbo, config.Debug, onProgress)
+			simGroups := similarity.FindSimilarGroups(files, config.Threshold, config.Debug, onProgress)
 
 			if !config.Web {
 				fmt.Println() // New line after progress bar
@@ -272,6 +271,14 @@ func main() {
 				log.Printf("❌ Web server error: %v", err)
 			}
 		}()
+
+		// Auto-open browser
+		go func() {
+			time.Sleep(1 * time.Second) // Give server a moment to bind
+			url := fmt.Sprintf("http://localhost:%d", config.Port)
+			log.Printf("🌍 Opening dashboard at %s ...", url)
+			openBrowser(url)
+		}()
 	}
 
 	elapsedTotal := time.Since(startTime)
@@ -301,7 +308,6 @@ func parseFlags() Config {
 	flag.BoolVar(&config.LeaveRef, "ref", false, "Leave a .txt file pointing to the preserved original")
 	flag.BoolVar(&config.Web, "web", false, "Start web dashboard after analysis")
 	flag.IntVar(&config.Port, "port", 8080, "Web server port")
-	flag.BoolVar(&config.GPUTurbo, "gpu", false, "Enable experimental GPU/Turbo acceleration (Bit-Parallel Engine)")
 	flag.BoolVar(&config.Debug, "debug", false, "Enable detailed debug logging for troubleshooting")
 	flag.BoolVar(&config.RunStep3, "check-similar", false, "Explicitly run Step 3 (Similarity Check). Default is on-demand.")
 	flag.BoolVar(&config.Version, "version", false, "Show version information and exit")
@@ -645,4 +651,23 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// openBrowser opens the specified URL in the default browser of the user.
+func openBrowser(url string) {
+	var err error
+
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", url).Start()
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	default:
+		err = fmt.Errorf("unsupported platform")
+	}
+	if err != nil {
+		log.Printf("⚠️  Could not open browser: %v", err)
+	}
 }

@@ -18,7 +18,7 @@ type SimilarityGroup struct {
 // instead of comparing every file with every other file (O(N^2)).
 // FindSimilarGroups uses an aggressive normalization strategy to cluster files efficiently (O(N))
 // instead of comparing every file with every other file (O(N^2)).
-func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, _ bool, onProgress func(float64)) []SimilarityGroup {
+func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress func(float64)) []SimilarityGroup {
 	if len(files) < 2 {
 		return nil
 	}

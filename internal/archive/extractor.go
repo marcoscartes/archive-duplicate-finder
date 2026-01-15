@@ -162,6 +162,39 @@ func FindPreviewPathInArchive(archivePath string) (string, error) {
 	return "", fmt.Errorf("no preview found")
 }
 
+// FindBestSTLInArchive returns the internal path of the best STL candidate
+func FindBestSTLInArchive(archivePath string) (string, error) {
+	previews, err := ListPreviewsInArchive(archivePath)
+	if err != nil {
+		return "", err
+	}
+	if len(previews) == 0 {
+		return "", fmt.Errorf("no files found")
+	}
+
+	// 1. Find STL with keywords
+	for _, f := range previews {
+		if isSTLFile(f.Path) && hasKeyword(f.Path) {
+			return f.Path, nil
+		}
+	}
+
+	// 2. Find largest STL
+	var bestSTL string
+	var maxSTLSize int64
+	for _, f := range previews {
+		if isSTLFile(f.Path) && f.Size > maxSTLSize {
+			bestSTL = f.Path
+			maxSTLSize = f.Size
+		}
+	}
+	if bestSTL != "" {
+		return bestSTL, nil
+	}
+
+	return "", fmt.Errorf("no 3D model found")
+}
+
 func isSTLFile(filename string) bool {
 	lower := strings.ToLower(filename)
 	if strings.Contains(lower, "__macosx") {
