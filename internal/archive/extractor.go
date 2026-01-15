@@ -58,7 +58,7 @@ func ListPreviewsInArchive(archivePath string) ([]PreviewInfo, error) {
 
 	var previews []PreviewInfo
 	for _, f := range files {
-		if isImageFile(f.Path) || isSTLFile(f.Path) || isVideoFile(f.Path) {
+		if isImageFile(f.Path) || isModelFile(f.Path) || isVideoFile(f.Path) {
 			previews = append(previews, f)
 		}
 	}
@@ -139,30 +139,30 @@ func FindPreviewPathInArchive(archivePath string) (string, error) {
 		return bestVideo, nil
 	}
 
-	// 3. Find STL with keywords
+	// 3. Find Model with keywords
 	for _, f := range previews {
-		if isSTLFile(f.Path) && hasKeyword(f.Path) {
+		if isModelFile(f.Path) && hasKeyword(f.Path) {
 			return f.Path, nil
 		}
 	}
 
-	// 4. Find largest STL
-	var bestSTL string
-	var maxSTLSize int64
+	// 4. Find largest Model
+	var bestModel string
+	var maxModelSize int64
 	for _, f := range previews {
-		if isSTLFile(f.Path) && f.Size > maxSTLSize {
-			bestSTL = f.Path
-			maxSTLSize = f.Size
+		if isModelFile(f.Path) && f.Size > maxModelSize {
+			bestModel = f.Path
+			maxModelSize = f.Size
 		}
 	}
-	if bestSTL != "" {
-		return bestSTL, nil
+	if bestModel != "" {
+		return bestModel, nil
 	}
 
 	return "", fmt.Errorf("no preview found")
 }
 
-// FindBestSTLInArchive returns the internal path of the best STL candidate
+// FindBestSTLInArchive returns the internal path of the best model (STL or OBJ) candidate
 func FindBestSTLInArchive(archivePath string) (string, error) {
 	previews, err := ListPreviewsInArchive(archivePath)
 	if err != nil {
@@ -172,35 +172,39 @@ func FindBestSTLInArchive(archivePath string) (string, error) {
 		return "", fmt.Errorf("no files found")
 	}
 
-	// 1. Find STL with keywords
+	// 1. Find Model with keywords
 	for _, f := range previews {
-		if isSTLFile(f.Path) && hasKeyword(f.Path) {
+		if isModelFile(f.Path) && hasKeyword(f.Path) {
 			return f.Path, nil
 		}
 	}
 
-	// 2. Find largest STL
-	var bestSTL string
-	var maxSTLSize int64
+	// 2. Find largest Model
+	var bestModel string
+	var maxModelSize int64
 	for _, f := range previews {
-		if isSTLFile(f.Path) && f.Size > maxSTLSize {
-			bestSTL = f.Path
-			maxSTLSize = f.Size
+		if isModelFile(f.Path) && f.Size > maxModelSize {
+			bestModel = f.Path
+			maxModelSize = f.Size
 		}
 	}
-	if bestSTL != "" {
-		return bestSTL, nil
+	if bestModel != "" {
+		return bestModel, nil
 	}
 
 	return "", fmt.Errorf("no 3D model found")
 }
 
-func isSTLFile(filename string) bool {
+func isModelFile(filename string) bool {
 	lower := strings.ToLower(filename)
 	if strings.Contains(lower, "__macosx") {
 		return false
 	}
-	return strings.HasSuffix(lower, ".stl")
+	return strings.HasSuffix(lower, ".stl") || strings.HasSuffix(lower, ".obj")
+}
+
+func isSTLFile(filename string) bool {
+	return strings.HasSuffix(strings.ToLower(filename), ".stl")
 }
 
 func hasKeyword(filename string) bool {

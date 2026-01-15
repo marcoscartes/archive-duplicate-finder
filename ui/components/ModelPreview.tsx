@@ -4,7 +4,7 @@ import { Canvas, useLoader, useFrame } from '@react-three/fiber'
 import { OrbitControls, Stage, Float, MeshDistortMaterial, Sphere, Center, Text, Html } from '@react-three/drei'
 import { useRef, Suspense, useState, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
-import { STLLoader } from 'three-stdlib'
+import { STLLoader, OBJLoader } from 'three-stdlib'
 import { Maximize2, Minimize2 } from 'lucide-react'
 
 function DemoScene() {
@@ -39,33 +39,50 @@ function DemoScene() {
     )
 }
 
-function STLModel({ url, color, position }: { url: string, color: string, position: [number, number, number] }) {
-    const geom = useLoader(STLLoader, url)
-    const [scale, setScale] = useState(1)
+function ModelViewer({ url, path, color, position }: { url: string, path: string, color: string, position: [number, number, number] }) {
+    const isObj = path.toLowerCase().endsWith('.obj');
+    const loaded = useLoader(isObj ? OBJLoader : STLLoader, url);
+    const [scale, setScale] = useState(1);
+    const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
 
-    // Auto-center and normalize size
     useEffect(() => {
+        if (!loaded) return;
+
+        let geom: THREE.BufferGeometry | null = null;
+        if (isObj) {
+            const group = loaded as THREE.Group;
+            group.traverse((child) => {
+                if (child instanceof THREE.Mesh && !geom) {
+                    geom = child.geometry;
+                }
+            });
+        } else {
+            geom = loaded as THREE.BufferGeometry;
+        }
+
         if (geom) {
-            geom.center()
-            geom.computeBoundingBox()
-            const box = geom.boundingBox
+            geom.center();
+            geom.computeBoundingBox();
+            const box = geom.boundingBox;
             if (box) {
-                const size = new THREE.Vector3()
-                box.getSize(size)
-                const maxDim = Math.max(size.x, size.y, size.z)
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z);
                 if (maxDim > 0) {
-                    // Normalize to fit in a ~3 unit box
-                    setScale(3 / maxDim)
+                    setScale(3 / maxDim);
                 }
             }
-            geom.computeVertexNormals()
+            geom.computeVertexNormals();
+            setGeometry(geom);
         }
-    }, [geom])
+    }, [loaded, isObj]);
+
+    if (!geometry) return null;
 
     return (
         <group position={position}>
             <mesh
-                geometry={geom}
+                geometry={geometry}
                 scale={[scale, scale, scale]}
                 rotation={[-Math.PI / 2, 0, 0]}
                 castShadow
@@ -86,7 +103,7 @@ function STLModel({ url, color, position }: { url: string, color: string, positi
                 </Html>
             )}
         </group>
-    )
+    );
 }
 
 function ComparisonScene({ files }: { files: string[] }) {
@@ -107,8 +124,9 @@ function ComparisonScene({ files }: { files: string[] }) {
     return (
         <Stage adjustCamera={1.2} intensity={0.5} environment="city" shadows="contact">
             {files.map((path, i) => (
-                <STLModel
+                <ModelViewer
                     key={path}
+                    path={path}
                     url={`${apiHost}/api/preview?path=${encodeURIComponent(path)}&type=model`}
                     color={colors[i % colors.length]}
                     position={[0, startY - (i * spacing), 0]}
@@ -147,8 +165,8 @@ export default function ModelPreview({ selectedFiles = [] }: ModelPreviewProps) 
 
     return (
         <div className={`transition-all duration-500 ease-in-out bg-gradient-to-b from-[#111115] to-[#0a0a0c] ${isFullscreen
-                ? 'fixed inset-0 z-[100] w-screen h-screen'
-                : 'w-full h-[600px] glass-card rounded-3xl overflow-hidden relative'
+            ? 'fixed inset-0 z-[100] w-screen h-screen'
+            : 'w-full h-[600px] glass-card rounded-3xl overflow-hidden relative'
             }`}>
             <div className="absolute top-6 right-6 z-20">
                 <button
