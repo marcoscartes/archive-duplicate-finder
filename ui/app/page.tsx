@@ -434,7 +434,7 @@ export default function Dashboard() {
             <h1 className="text-5xl font-black tracking-tight flex items-center gap-4">
               <span className="bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">ARCHIVE</span>
               <span className="text-white">FINDER</span>
-              <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-md text-xs text-blue-400 uppercase tracking-widest font-bold">Intelligence v1.2.0</div>
+              <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-md text-xs text-blue-400 uppercase tracking-widest font-bold">Intelligence v1.8.0</div>
             </h1>
             <p className="text-gray-500 mt-2 font-medium tracking-wide text-lg">3D Asset Deduplication & Management Dashboard</p>
           </div>
