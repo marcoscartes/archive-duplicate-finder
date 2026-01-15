@@ -183,6 +183,7 @@ func main() {
 			}
 
 			log.Println("📝 Step 3: Similar name analysis STARTED (Clustering Mode)...")
+			step3Start := time.Now()
 
 			// Set status to analyzing to trigger UI progress bar
 			finalReport.Status = "analyzing_step3"
@@ -194,7 +195,7 @@ func main() {
 
 			finalReport.SimilarGroups = results
 			finalReport.SimilarCount = len(results)
-			finalReport.AnalysisDuration = time.Since(startTime).Seconds()
+			finalReport.AnalysisDuration += time.Since(step3Start).Seconds()
 			finalReport.Status = "finished"
 
 			log.Printf("✅ Step 3 analysis FINISHED. Found %d similarity clusters.", len(results))
@@ -316,7 +317,7 @@ func parseFlags() Config {
 	flag.Parse()
 
 	if config.Version {
-		fmt.Println("Archive Duplicate Finder v1.7.2")
+		fmt.Println("Archive Duplicate Finder v1.8.0")
 		os.Exit(0)
 	}
 
