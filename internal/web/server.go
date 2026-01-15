@@ -21,29 +21,31 @@ import (
 
 // Server represents the web dashboard server
 type Server struct {
-	addr         string
-	report       *reporter.Report
-	trashPath    string
-	leaveRef     bool
-	debug        bool
-	runStep3Func func()
-	allFiles     []reporter.FileInfo
-	cache        *db.Cache
-	previewSem   chan struct{}
-	mu           sync.Mutex
+	addr          string
+	report        *reporter.Report
+	trashPath     string
+	leaveRef      bool
+	debug         bool
+	runStep3Func  func()
+	runVisualFunc func()
+	allFiles      []reporter.FileInfo
+	cache         *db.Cache
+	previewSem    chan struct{}
+	mu            sync.Mutex
 }
 
 // NewServer creates a new web dashboard server
-func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), allFiles []reporter.FileInfo, cache *db.Cache) *Server {
+func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), runVisualFunc func(), allFiles []reporter.FileInfo, cache *db.Cache) *Server {
 	return &Server{
-		addr:         fmt.Sprintf(":%d", port),
-		report:       report,
-		trashPath:    trashPath,
-		leaveRef:     leaveRef,
-		runStep3Func: runStep3Func,
-		allFiles:     allFiles,
-		cache:        cache,
-		previewSem:   make(chan struct{}, 4), // Allow 4 concurrent extractions
+		addr:          fmt.Sprintf(":%d", port),
+		report:        report,
+		trashPath:     trashPath,
+		leaveRef:      leaveRef,
+		runStep3Func:  runStep3Func,
+		runVisualFunc: runVisualFunc,
+		allFiles:      allFiles,
+		cache:         cache,
+		previewSem:    make(chan struct{}, 4), // Allow 4 concurrent extractions
 	}
 }
 
@@ -77,6 +79,14 @@ func (s *Server) Start() error {
 			return c.SendStatus(202) // Accepted
 		}
 		return c.Status(501).SendString("Step 3 runner not configured")
+	})
+
+	api.Post("/run-visual", func(c *fiber.Ctx) error {
+		if s.runVisualFunc != nil {
+			go s.runVisualFunc()     // Run in background
+			return c.SendStatus(202) // Accepted
+		}
+		return c.Status(501).SendString("Visual runner not configured")
 	})
 
 	api.Get("/report", func(c *fiber.Ctx) error {

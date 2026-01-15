@@ -125,84 +125,96 @@ func main() {
 	finalReport := &baseReport
 	finalReport.SizeGroups = finalSizeGroups
 
-	// Step 3 Context
 	var runStep3Trigger func()
+	var runVisualTrigger func()
 
-	// Step 3: Similar Names Logic
+	// Step 3 Logic
 	var finalSimilarGroups []reporter.SimilarityGroup
-	if config.Mode == "all" || config.Mode == "name" {
-		runStep3Job := func() []reporter.SimilarityGroup {
-			// Check cache (TODO: Update cache logic for groups if needed, for now skip cache for groups to ensure correctness)
-			// if cache != nil ... (Skip mostly because struct changed)
+	runStep3Job := func() []reporter.SimilarityGroup {
+		log.Printf("🚀 Optimized Clustering Engine: Active (O(N) Speed)")
 
-			log.Printf("🚀 Optimized Clustering Engine: Active (O(N) Speed)")
-
-			// Define progress callback
-			onProgress := func(p float64) {
-				finalReport.Progress = p
-				// Print visual progress bar in CLI if not in quiet mode
-				if !config.Web {
-					// Simple CLI progress - overwrites line
-					fmt.Printf("\r⏳ Similarity Analysis: [%-20s] %.1f%%",
-						strings.Repeat("=", int(p/5)), p)
-				}
-			}
-
-			// Use new Clustering Algorithm (O(N)) with Progress
-			simGroups := similarity.FindSimilarGroups(files, config.Threshold, config.Debug, onProgress)
-
+		onProgress := func(p float64) {
+			finalReport.Progress = p
 			if !config.Web {
-				fmt.Println() // New line after progress bar
+				fmt.Printf("\r🔍 Similar Names: [%-20s] %.1f%%", strings.Repeat("=", int(p/5)), p)
 			}
-
-			// Convert to Reporter types
-			var results []reporter.SimilarityGroup
-			for _, g := range simGroups {
-				var fileInfos []reporter.FileInfo
-				for _, f := range g.Files {
-					fileInfos = append(fileInfos, reporter.FileInfo{
-						Name:    f.Name,
-						Path:    f.Path,
-						Size:    f.Size,
-						Type:    f.Type,
-						ModTime: f.ModTime.Format(time.RFC3339),
-					})
-				}
-				results = append(results, reporter.SimilarityGroup{
-					BaseName: g.BaseName,
-					Files:    fileInfos,
-				})
-			}
-			return results
 		}
 
-		// Define the trigger function (that wraps the job and acts on results)
-		runStep3Trigger = func() {
-			if finalReport.SimilarCount > 0 || finalReport.Status == "finished_step3" {
-				log.Println("ℹ️  Step 3 already ran or results are present.")
-				return
+		simGroups := similarity.FindSimilarGroups(files, config.Threshold, config.Debug, onProgress)
+
+		if !config.Web {
+			fmt.Println()
+		}
+
+		var results []reporter.SimilarityGroup
+		for _, g := range simGroups {
+			var fileInfos []reporter.FileInfo
+			for _, f := range g.Files {
+				fileInfos = append(fileInfos, reporter.FileInfo{
+					Name:    f.Name,
+					Path:    f.Path,
+					Size:    f.Size,
+					Type:    f.Type,
+					ModTime: f.ModTime.Format(time.RFC3339),
+				})
 			}
+			results = append(results, reporter.SimilarityGroup{
+				BaseName: g.BaseName,
+				Files:    fileInfos,
+			})
+		}
+		return results
+	}
 
-			log.Println("📝 Step 3: Similar name analysis STARTED (Clustering Mode)...")
-			step3Start := time.Now()
+	runStep3Trigger = func() {
+		if finalReport.Status == "analyzing_step3" {
+			log.Println("ℹ️  Step 3 is already running.")
+			return
+		}
 
-			// Set status to analyzing to trigger UI progress bar
-			finalReport.Status = "analyzing_step3"
-			finalReport.Progress = 0
+		log.Println("📝 Step 3: Similar name analysis STARTED (Clustering Mode)...")
+		step3Start := time.Now()
+		finalReport.Status = "analyzing_step3"
+		finalReport.Progress = 0
 
-			results := runStep3Job()
+		results := runStep3Job()
 
-			// Update Cache (omitted for now due to struct change)
+		finalReport.SimilarGroups = results
+		finalReport.SimilarCount = len(results)
+		finalReport.AnalysisDuration += time.Since(step3Start).Seconds()
+		finalReport.Status = "finished"
 
-			finalReport.SimilarGroups = results
-			finalReport.SimilarCount = len(results)
-			finalReport.AnalysisDuration += time.Since(step3Start).Seconds()
-			finalReport.Status = "finished"
+		log.Printf("✅ Step 3 analysis FINISHED. Found %d similarity clusters.", len(results))
 
-			log.Printf("✅ Step 3 analysis FINISHED. Found %d similarity clusters.", len(results))
+		if !config.Web {
+			for i, g := range results {
+				if i >= 10 && !config.Verbose {
+					if i == 10 {
+						fmt.Println("... (Use --verbose to see all groups)")
+					}
+					continue
+				}
+				fmt.Printf("🔍 Cluster: '%s' (%d files)\n", g.BaseName, len(g.Files))
+				for _, f := range g.Files {
+					fmt.Printf("  • %s (%s)\n", f.Name, formatBytes(f.Size))
+				}
+				fmt.Println()
+			}
+		}
+	}
 
-			// ADDED: Step 4 - Visual Analysis
-			log.Println("🎨 Step 4: Visual Fingerprinting STARTED...")
+	runVisualTrigger = func() {
+		if finalReport.Status == "analyzing_visual" {
+			log.Println("ℹ️  Visual analysis is already running.")
+			return
+		}
+
+		log.Println("🎨 Step 4: Visual Fingerprinting STARTED (Incremental Mode)...")
+		finalReport.Status = "analyzing_visual"
+		finalReport.Progress = 0
+
+		hashDone := make(chan bool)
+		go func() {
 			onVisualProgress := func(p float64) {
 				finalReport.Progress = p
 				if !config.Web {
@@ -211,14 +223,14 @@ func main() {
 				}
 			}
 			visual.ProcessVisualHashes(files, cache, config.Debug, onVisualProgress)
-			if !config.Web {
-				fmt.Println()
-			}
+			hashDone <- true
+		}()
 
-			log.Println("🖼️  Grouping Visual Duplicates...")
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+
+		updateVisualGroups := func() {
 			visualGroups := visual.FindVisualDuplicates(files, cache, config.Threshold)
-
-			// Convert visual.SimilarityGroup to reporter.SimilarityGroup
 			var reporterVisualGroups []reporter.SimilarityGroup
 			for _, vg := range visualGroups {
 				var fileInfos []reporter.FileInfo
@@ -239,28 +251,27 @@ func main() {
 			}
 			finalReport.VisualGroups = reporterVisualGroups
 			finalReport.VisualCount = len(reporterVisualGroups)
-			log.Printf("✅ Visual analysis FINISHED. Found %d visual duplicate groups.", len(reporterVisualGroups))
+		}
 
-			// Print textual summary of groups
-			for i, g := range results {
-				if i >= 10 && !config.Verbose {
-					if i == 10 {
-						fmt.Println("... (Use --verbose to see all groups)")
-					}
-					continue
+	loop:
+		for {
+			select {
+			case <-hashDone:
+				if !config.Web {
+					fmt.Println()
 				}
-				fmt.Printf("🔍 Cluster: '%s' (%d files)\n", g.BaseName, len(g.Files))
-				for _, f := range g.Files {
-					fmt.Printf("  • %s (%s)\n", f.Name, formatBytes(f.Size))
-				}
-				fmt.Println()
-			}
-
-			if config.PDFFile != "" {
-				log.Println("⚠️  PDF Export for clusters not yet implemented.")
+				updateVisualGroups()
+				break loop
+			case <-ticker.C:
+				updateVisualGroups()
 			}
 		}
 
+		finalReport.Status = "finished"
+		log.Printf("✅ Visual analysis FINISHED. Found %d visual duplicate groups total.", finalReport.VisualCount)
+	}
+
+	if config.Mode == "all" || config.Mode == "name" {
 		if config.Interactive {
 			// Interactive mode force
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -306,7 +317,7 @@ func main() {
 			})
 		}
 
-		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, allFileInfos, cache)
+		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, runVisualTrigger, allFileInfos, cache)
 		srv.SetDebug(config.Debug)
 		go func() {
 			if err := srv.Start(); err != nil {

@@ -398,11 +398,21 @@ export default function Dashboard() {
     const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
     try {
       await fetch(`${apiHost}/api/run-step-3`, { method: 'POST' })
-      // Trigger a status update manually or let the poller catch it
-      setStatus('analyzing')
+      setStatus('analyzing_step3')
     } catch (err) {
       console.error("Failed to run Step 3:", err)
       alert("Error triggering Step 3")
+    }
+  }
+
+  const handleRunVisual = async () => {
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    try {
+      await fetch(`${apiHost}/api/run-visual`, { method: 'POST' })
+      setStatus('analyzing_visual')
+    } catch (err) {
+      console.error("Failed to run Visual analysis:", err)
+      alert("Error triggering Visual analysis")
     }
   }
 
@@ -872,12 +882,12 @@ export default function Dashboard() {
 
                 <button
                   onClick={handleRunStep3}
-                  disabled={data?.status === 'analyzing_step3'}
+                  disabled={data?.status === 'analyzing_step3' || data?.status === 'analyzing_visual'}
                   className="w-full py-4 glass-card border-white/10 hover:border-cyan-500/40 text-gray-400 hover:text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {data?.status === 'analyzing_step3' ? (
                     <div className="flex flex-col items-center w-full px-4">
-                      <span className="mb-2">Scanning... {(data.progress || 0).toFixed(0)}%</span>
+                      <span className="mb-2">Scanning Names... {(data.progress || 0).toFixed(0)}%</span>
                       <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-cyan-500 transition-all duration-300 ease-out"
@@ -888,7 +898,30 @@ export default function Dashboard() {
                   ) : (
                     <>
                       <FileText className="w-4 h-4 text-cyan-500" />
-                      Run Similarity Analysis
+                      Similar Name Scan
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleRunVisual}
+                  disabled={data?.status === 'analyzing_step3' || data?.status === 'analyzing_visual'}
+                  className="w-full py-4 glass-card border-white/10 hover:border-orange-500/40 text-gray-400 hover:text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {data?.status === 'analyzing_visual' ? (
+                    <div className="flex flex-col items-center w-full px-4">
+                      <span className="mb-2">A.I. Visual Scan... {(data.progress || 0).toFixed(0)}%</span>
+                      <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-orange-500 transition-all duration-300 ease-out"
+                          style={{ width: `${data.progress || 0}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <ImageIcon className="w-4 h-4 text-orange-500" />
+                      A.I. Visual Match Scan
                     </>
                   )}
                 </button>
