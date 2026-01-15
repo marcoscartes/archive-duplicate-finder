@@ -3,21 +3,46 @@
 
 Write-Host "🚀 Starting environment setup for Windows..." -ForegroundColor Cyan
 
+function Prompt-Install($name, $command) {
+    $title = "Missing Dependency"
+    $message = "$name is not installed. Would you like to try installing it automatically via Winget?"
+    $options = [System.Management.Automation.Host.ChoiceDescription[]] @(
+        New-Object System.Management.Automation.Host.ChoiceDescription "&Yes", "Try automatic installation"
+        New-Object System.Management.Automation.Host.ChoiceDescription "&No", "Skip and exit"
+    )
+    $result = $host.ui.PromptForChoice($title, $message, $options, 0)
+    if ($result -eq 0) {
+        Write-Host "📦 Attempting to install $name..." -ForegroundColor Yellow
+        Invoke-Expression $command
+        return $true
+    }
+    return $false
+}
+
 # 1. Check Go
 $goPath = Get-Command go -ErrorAction SilentlyContinue
 if (-not $goPath) {
-    Write-Host "❌ Go is not installed. Please install Go from https://go.dev/dl/" -ForegroundColor Red
-    exit 1
+    if (Prompt-Install "Go Programming Language" "winget install GoLang.Go") {
+        Write-Host "✅ Installation triggered. Please RESTART your terminal after it finishes and run this script again." -ForegroundColor Green
+        exit 0
+    } else {
+        Write-Host "❌ Go is required. Install it manually from https://go.dev/dl/" -ForegroundColor Red
+        exit 1
+    }
 } else {
     Write-Host "✅ Go is installed: $(go version)" -ForegroundColor Green
 }
 
 # 2. Check Node.js & NPM
 $nodePath = Get-Command node -ErrorAction SilentlyContinue
-$npmPath = Get-Command npm -ErrorAction SilentlyContinue
-if (-not $nodePath -or -not $npmPath) {
-    Write-Host "❌ Node.js or NPM not found. Please install from https://nodejs.org/" -ForegroundColor Red
-    exit 1
+if (-not $nodePath) {
+    if (Prompt-Install "Node.js (LTS)" "winget install OpenJS.NodeJS.LTS") {
+        Write-Host "✅ Installation triggered. Please RESTART your terminal after it finishes and run this script again." -ForegroundColor Green
+        exit 0
+    } else {
+        Write-Host "❌ Node.js is required. Install it from https://nodejs.org/" -ForegroundColor Red
+        exit 1
+    }
 } else {
     Write-Host "✅ Node.js $((node -v)) and NPM $((npm -v)) are installed." -ForegroundColor Green
 }
