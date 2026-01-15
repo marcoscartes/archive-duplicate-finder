@@ -32,14 +32,7 @@ Set-Location ui
 npm install
 Set-Location ..
 
-# 5. Check GitHub CLI (Optional but recommended for releases)
-$ghPath = Get-Command gh -ErrorAction SilentlyContinue
-if (-not $ghPath) {
-    Write-Host "⚠️  GitHub CLI (gh) not found. Required if you want to use the release script." -ForegroundColor DarkYellow
-} else {
-    Write-Host "✅ GitHub CLI is installed." -ForegroundColor Green
-}
-
-Write-Host "✨ Setup complete! You can now run the project." -ForegroundColor Cyan
-Write-Host "   Development: cd ui; npm run dev"
-Write-Host "   Build Release: .\make_release.ps1 'notes'"
+Write-Host "✨ Setup complete! You can now build and run the project." -ForegroundColor Cyan
+Write-Host "   Build: go build -o archive-finder.exe cmd/finder/main.go"
+Write-Host "   Run:   .\archive-finder.exe"
+Write-Host "   UI Development: cd ui; npm run dev"

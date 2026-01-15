@@ -35,13 +35,7 @@ cd ui
 npm install
 cd ..
 
-# 5. Check GitHub CLI (Optional but recommended for releases)
-if ! command -v gh &> /dev/null; then
-    echo "⚠️  GitHub CLI (gh) not found. Required if you want to use the release script."
-else
-    echo "✅ GitHub CLI is installed."
-fi
-
-echo "✨ Setup complete! You can now run the project."
-echo "   Development: cd ui && npm run dev"
-echo "   Build: ./make_release (if on Windows) or manual go build"
+echo "✨ Setup complete! You can now build and run the project."
+echo "   Build: go build -o archive-finder cmd/finder/main.go"
+echo "   Run:   ./archive-finder"
+echo "   UI Development: cd ui && npm run dev"
