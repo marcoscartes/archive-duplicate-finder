@@ -9,6 +9,7 @@ archive-finder.exe
 archive-finder-*
 *.bat
 !smart_launcher.bat
+make_release.ps1
 
 # Test binary
 *.test
