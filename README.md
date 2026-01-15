@@ -1,7 +1,7 @@
 # 📦 Archive Duplicate Finder
 
 <p align="center">
-  <img src="archive_finder_hero.png" alt="Archive Duplicate Finder Banner" width="800">
+  <img src="assets/archive_finder_hero.png" alt="Archive Duplicate Finder Banner" width="800">
 </p>
 
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://golang.org/)
