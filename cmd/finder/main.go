@@ -21,6 +21,7 @@ import (
 	"archive-duplicate-finder/internal/scanner"
 	"archive-duplicate-finder/internal/similarity"
 	"archive-duplicate-finder/internal/stl"
+	"archive-duplicate-finder/internal/visual"
 	"archive-duplicate-finder/internal/web"
 )
 
@@ -199,6 +200,46 @@ func main() {
 			finalReport.Status = "finished"
 
 			log.Printf("✅ Step 3 analysis FINISHED. Found %d similarity clusters.", len(results))
+
+			// ADDED: Step 4 - Visual Analysis
+			log.Println("🎨 Step 4: Visual Fingerprinting STARTED...")
+			onVisualProgress := func(p float64) {
+				finalReport.Progress = p
+				if !config.Web {
+					fmt.Printf("\r🌆 Visual Hashing: [%-20s] %.1f%%",
+						strings.Repeat("=", int(p/5)), p)
+				}
+			}
+			visual.ProcessVisualHashes(files, cache, config.Debug, onVisualProgress)
+			if !config.Web {
+				fmt.Println()
+			}
+
+			log.Println("🖼️  Grouping Visual Duplicates...")
+			visualGroups := visual.FindVisualDuplicates(files, cache, config.Threshold)
+
+			// Convert visual.SimilarityGroup to reporter.SimilarityGroup
+			var reporterVisualGroups []reporter.SimilarityGroup
+			for _, vg := range visualGroups {
+				var fileInfos []reporter.FileInfo
+				for _, f := range vg.Files {
+					fileInfos = append(fileInfos, reporter.FileInfo{
+						Name:    f.Name,
+						Path:    f.Path,
+						Size:    f.Size,
+						Type:    f.Type,
+						ModTime: f.ModTime,
+						PHash:   f.PHash,
+					})
+				}
+				reporterVisualGroups = append(reporterVisualGroups, reporter.SimilarityGroup{
+					BaseName: vg.BaseName,
+					Files:    fileInfos,
+				})
+			}
+			finalReport.VisualGroups = reporterVisualGroups
+			finalReport.VisualCount = len(reporterVisualGroups)
+			log.Printf("✅ Visual analysis FINISHED. Found %d visual duplicate groups.", len(reporterVisualGroups))
 
 			// Print textual summary of groups
 			for i, g := range results {

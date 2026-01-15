@@ -29,6 +29,7 @@ interface FileInfo {
   path: string
   size: number
   mod_time: string
+  p_hash?: number
 }
 
 interface SizeGroup {
@@ -45,6 +46,8 @@ interface Report {
   total_files: number
   size_groups: SizeGroup[]
   similar_groups: SimilarityGroup[]
+  visual_groups: SimilarityGroup[]
+  visual_count: number
   analysis_duration_seconds: number
   status?: string
   progress?: number
@@ -251,7 +254,7 @@ export default function Dashboard() {
   const [fileType, setFileType] = useState('all')
   const [status, setStatus] = useState<string | null>(null)
   const [notified, setNotified] = useState(false)
-  const [viewMode, setViewMode] = useState<'size' | 'similar'>('size')
+  const [viewMode, setViewMode] = useState<'size' | 'similar' | 'visual'>('size')
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(50)
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
@@ -356,9 +359,22 @@ export default function Dashboard() {
     }) || []
   }, [data?.similar_groups, searchQuery, fileType])
 
-  const currentItems = useMemo(() =>
-    viewMode === 'size' ? (filteredSizeGroups || []) : (filteredSimilarGroups || [])
-    , [viewMode, filteredSizeGroups, filteredSimilarGroups])
+  const currentItems = useMemo(() => {
+    if (viewMode === 'size') return filteredSizeGroups || []
+    if (viewMode === 'similar') return filteredSimilarGroups || []
+
+    // Visual Matching Filtering (similar to similarity groups)
+    if (!data?.visual_groups) return []
+    const query = searchQuery.toLowerCase()
+    return data.visual_groups.filter(group => {
+      return group.files.some(f => {
+        const name = (f?.name || '').toLowerCase()
+        const matchesSearch = name.includes(query)
+        const matchesType = fileType === 'all' || name.endsWith(`.${fileType.toLowerCase()}`)
+        return matchesSearch && matchesType
+      })
+    }) || []
+  }, [viewMode, filteredSizeGroups, filteredSimilarGroups, data?.visual_groups, searchQuery, fileType])
 
   const paginatedItems = useMemo(() =>
     currentItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
@@ -419,7 +435,8 @@ export default function Dashboard() {
   const stats = [
     { label: 'Total Files', value: data?.total_files || 0, icon: Box, color: 'text-blue-400' },
     { label: 'Size Groups', value: data?.size_groups?.length || 0, icon: Layers, color: 'text-purple-400' },
-    { label: 'Similar Clusters', value: data?.similar_groups?.length || 0, icon: FileText, color: 'text-cyan-400' },
+    { label: 'Similar Names', value: data?.similar_groups?.length || 0, icon: FileText, color: 'text-cyan-400' },
+    { label: 'Visual Matches', value: data?.visual_groups?.length || 0, icon: ImageIcon, color: 'text-orange-400' },
     { label: 'Scan Time', value: `${data?.analysis_duration_seconds?.toFixed(2) || 0}s`, icon: Clock, color: 'text-green-400' },
   ]
 
@@ -497,6 +514,16 @@ export default function Dashboard() {
                 <FileText className="w-5 h-5" />
                 Similar Names
               </button>
+              <button
+                onClick={() => setViewMode('visual')}
+                className={`px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center gap-3 whitespace-nowrap ${viewMode === 'visual'
+                  ? 'bg-orange-600 text-white shadow-lg shadow-orange-500/20'
+                  : 'text-gray-500 hover:text-gray-300'
+                  }`}
+              >
+                <ImageIcon className="w-5 h-5" />
+                Visual Hits
+              </button>
             </div>
 
             <div className="relative flex-grow sm:flex-grow-0">
@@ -530,33 +557,43 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-10 relative z-10 w-full">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-10 relative z-10 w-full">
           {stats.map((stat, i) => (
             <div key={stat.label} className="relative w-full">
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className={`glass-card p-5 rounded-[1.5rem] relative overflow-hidden group hover:scale-[1.02] transition-all cursor-pointer h-full min-h-[120px] flex flex-col justify-between ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar')
-                  ? 'border-blue-500/50 shadow-lg shadow-blue-500/10'
-                  : 'border-white/5'
+                className={`glass-card p-4 rounded-[1.2rem] relative overflow-hidden group hover:scale-[1.03] transition-all cursor-pointer h-full min-h-[110px] flex flex-col justify-between border border-white/5 ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar') || (stat.label === 'Visual Matches' && viewMode === 'visual')
+                  ? 'border-blue-500/40 shadow-[0_0_20px_rgba(59,130,246,0.1)] bg-blue-500/5'
+                  : 'hover:border-white/20'
                   }`}
                 onClick={() => {
                   if (stat.label === 'Size Groups') setViewMode('size')
-                  if (stat.label === 'Similar Clusters') setViewMode('similar')
+                  if (stat.label === 'Similar Names') setViewMode('similar')
+                  if (stat.label === 'Visual Matches') setViewMode('visual')
                 }}
               >
-                <div className={`absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-blue-500/0 via-blue-500/50 to-blue-500/0 group-hover:via-blue-400 transition-all`} />
-                <div className="flex justify-between items-start w-full">
-                  <div className="flex items-center gap-4">
-                    <div className="p-2 rounded-xl bg-white/5">
-                      <stat.icon className={`w-6 h-6 ${stat.color} opacity-90`} />
+                {/* Dynamic Accent Bar */}
+                <div className={`absolute top-0 left-0 w-1 h-full bg-current opacity-30 group-hover:opacity-100 transition-all ${stat.color.replace('text-', 'bg-')}`} />
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between items-center">
+                    <div className={`p-1.5 rounded-lg bg-white/5 border border-white/5 ${stat.color}`}>
+                      <stat.icon className="w-4 h-4" />
                     </div>
-                    <div className="text-4xl font-black text-white glow-text tracking-tight break-all">{stat.value}</div>
+                    <div className="text-[9px] font-black text-gray-500 uppercase tracking-[0.15em]">{stat.label}</div>
                   </div>
-                  <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1 text-right max-w-[40%] leading-tight">{stat.label}</div>
+
+                  <div className="mt-1">
+                    <div className={`text-2xl lg:text-3xl font-black text-white glow-text tracking-tighter truncate leading-none`}>
+                      {stat.value}
+                    </div>
+                  </div>
                 </div>
+
+                {/* Subtle Background Glow */}
+                <div className={`absolute -right-4 -bottom-4 w-16 h-16 rounded-full blur-[40px] opacity-10 transition-opacity group-hover:opacity-30 ${stat.color.replace('text-', 'bg-')}`} />
               </motion.div>
             </div>
           ))}
@@ -578,7 +615,8 @@ export default function Dashboard() {
                 </div>
                 <div>
                   <h2 className="text-2xl font-black text-white uppercase tracking-wide">
-                    {viewMode === 'size' ? 'Identical Size Groups' : 'Similarity Hits'}
+                    {viewMode === 'size' ? 'Identical Size Groups' :
+                      viewMode === 'similar' ? 'Similarity Hits' : 'Visual Match Hits'}
                   </h2>
                   <p className="text-xs text-gray-500 font-medium mt-1">
                     Review and manage detected duplicate sets
@@ -666,7 +704,7 @@ export default function Dashboard() {
                       </motion.div>
                     )
                   })
-                ) : (
+                ) : viewMode === 'similar' ? (
                   (paginatedItems as SimilarityGroup[]).map((group, i) => {
                     const isSelected = selectedFiles.length > 0 && group.files.length > 0 && selectedFiles[0] === group.files[0].path
                     return (
@@ -694,6 +732,51 @@ export default function Dashboard() {
                           {[...group.files].sort((a, b) => b.size - a.size).map((file) => (
                             <FileItem key={file.path} file={file} onRefresh={fetchData} />
                           ))}
+                        </div>
+                      </motion.div>
+                    )
+                  })
+                ) : (
+                  (paginatedItems as SimilarityGroup[]).map((group, i) => {
+                    const isSelected = selectedFiles.length > 0 && group.files.length > 0 && selectedFiles[0] === group.files[0].path
+                    return (
+                      <motion.div
+                        key={i}
+                        layoutId={`group-${viewMode}-${i}`}
+                        onClick={() => setSelectedFiles(group.files.map(f => f.path))}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={`glass-card p-4 rounded-2xl border transition-all cursor-pointer ${isSelected
+                          ? 'border-orange-500 shadow-lg shadow-orange-500/20 bg-orange-500/5'
+                          : 'border-white/5 hover:border-orange-500/30 bg-gradient-to-r from-orange-900/10 to-transparent'
+                          }`}
+                      >
+                        <div className="flex justify-between items-center mb-4">
+                          <span className={`text-[10px] font-black uppercase tracking-widest truncate max-w-[70%] transition-colors ${isSelected ? 'text-orange-400' : 'text-orange-500/60'}`}>
+                            Visual Perceptual Match: {group.base_name || "Unknown"}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <div className="px-2 py-0.5 rounded bg-orange-500/20 text-[10px] font-bold text-orange-400 uppercase tracking-widest border border-orange-500/30">
+                              A.I. Confirmed
+                            </div>
+                            <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
+                              {group.files.length} Files
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            {group.files.slice(0, 2).map(f => (
+                              <div key={f.path} className="rounded-lg overflow-hidden border border-white/5">
+                                <PreviewImage path={f.path} />
+                              </div>
+                            ))}
+                          </div>
+                          <div className="space-y-2">
+                            {group.files.map((file) => (
+                              <FileItem key={file.path} file={file} onRefresh={fetchData} />
+                            ))}
+                          </div>
                         </div>
                       </motion.div>
                     )

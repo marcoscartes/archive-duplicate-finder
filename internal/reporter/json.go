@@ -12,6 +12,8 @@ type Report struct {
 	SizeGroups       []SizeGroup       `json:"size_groups"`
 	SimilarGroups    []SimilarityGroup `json:"similar_groups"`
 	SimilarCount     int               `json:"similar_count"`
+	VisualGroups     []SimilarityGroup `json:"visual_groups"`
+	VisualCount      int               `json:"visual_count"`
 	AnalysisDuration float64           `json:"analysis_duration_seconds"`
 	Timestamp        string            `json:"timestamp"`
 	Status           string            `json:"status"`   // "analyzing", "finished"
@@ -37,6 +39,7 @@ type FileInfo struct {
 	Size    int64  `json:"size"`
 	Type    string `json:"type"`
 	ModTime string `json:"mod_time"`
+	PHash   uint64 `json:"p_hash,omitempty"`
 }
 
 // ExportJSON exports the report to a JSON file

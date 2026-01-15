@@ -46,6 +46,11 @@ func NewCache() (*Cache, error) {
 			internal_path TEXT,
 			mod_time TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS visual_cache (
+			path TEXT PRIMARY KEY,
+			phash INTEGER,
+			mod_time TEXT
+		)`,
 	}
 
 	for _, q := range queries {
@@ -109,4 +114,18 @@ func (c *Cache) GetPreviewPath(path string, modTime string) (string, bool) {
 
 func (c *Cache) PutPreviewPath(path string, internalPath string, modTime string) {
 	_, _ = c.db.Exec("INSERT OR REPLACE INTO preview_cache (path, internal_path, mod_time) VALUES (?, ?, ?)", path, internalPath, modTime)
+}
+
+func (c *Cache) GetVisualHash(path string, modTime string) (uint64, bool) {
+	var phash int64
+	var cachedModTime string
+	err := c.db.QueryRow("SELECT phash, mod_time FROM visual_cache WHERE path = ?", path).Scan(&phash, &cachedModTime)
+	if err != nil || cachedModTime != modTime {
+		return 0, false
+	}
+	return uint64(phash), true
+}
+
+func (c *Cache) PutVisualHash(path string, phash uint64, modTime string) {
+	_, _ = c.db.Exec("INSERT OR REPLACE INTO visual_cache (path, phash, mod_time) VALUES (?, ?, ?)", path, int64(phash), modTime)
 }
