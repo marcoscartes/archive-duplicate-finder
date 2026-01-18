@@ -51,6 +51,9 @@ func NewCache() (*Cache, error) {
 			phash INTEGER,
 			mod_time TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS ignored_groups (
+			hash TEXT PRIMARY KEY
+		)`,
 	}
 
 	for _, q := range queries {
@@ -128,4 +131,14 @@ func (c *Cache) GetVisualHash(path string, modTime string) (uint64, bool) {
 
 func (c *Cache) PutVisualHash(path string, phash uint64, modTime string) {
 	_, _ = c.db.Exec("INSERT OR REPLACE INTO visual_cache (path, phash, mod_time) VALUES (?, ?, ?)", path, int64(phash), modTime)
+}
+
+func (c *Cache) AddIgnoredGroup(hash string) {
+	_, _ = c.db.Exec("INSERT OR REPLACE INTO ignored_groups (hash) VALUES (?)", hash)
+}
+
+func (c *Cache) IsGroupIgnored(hash string) bool {
+	var exists int
+	err := c.db.QueryRow("SELECT 1 FROM ignored_groups WHERE hash = ?", hash).Scan(&exists)
+	return err == nil
 }

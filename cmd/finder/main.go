@@ -317,7 +317,7 @@ func main() {
 			})
 		}
 
-		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, runVisualTrigger, allFileInfos, cache)
+		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, runVisualTrigger, allFileInfos, cache, config.Directory)
 		srv.SetDebug(config.Debug)
 		go func() {
 			if err := srv.Start(); err != nil {

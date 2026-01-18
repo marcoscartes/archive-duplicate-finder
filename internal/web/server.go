@@ -31,11 +31,12 @@ type Server struct {
 	allFiles      []reporter.FileInfo
 	cache         *db.Cache
 	previewSem    chan struct{}
+	scanDir       string
 	mu            sync.Mutex
 }
 
 // NewServer creates a new web dashboard server
-func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), runVisualFunc func(), allFiles []reporter.FileInfo, cache *db.Cache) *Server {
+func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), runVisualFunc func(), allFiles []reporter.FileInfo, cache *db.Cache, scanDir string) *Server {
 	return &Server{
 		addr:          fmt.Sprintf(":%d", port),
 		report:        report,
@@ -46,6 +47,7 @@ func NewServer(port int, report *reporter.Report, trashPath string, leaveRef boo
 		allFiles:      allFiles,
 		cache:         cache,
 		previewSem:    make(chan struct{}, 4), // Allow 4 concurrent extractions
+		scanDir:       scanDir,
 	}
 }
 
@@ -89,17 +91,127 @@ func (s *Server) Start() error {
 		return c.Status(501).SendString("Visual runner not configured")
 	})
 
+	api.Post("/open-directory", func(c *fiber.Ctx) error {
+		absPath, err := filepath.Abs(s.scanDir)
+		if err != nil {
+			absPath = s.scanDir
+		}
+
+		log.Printf("📂 Opening directory in explorer: %s", absPath)
+
+		var cmdErr error
+		switch runtime.GOOS {
+		case "linux":
+			cmdErr = exec.Command("xdg-open", absPath).Start()
+		case "windows":
+			cmdErr = exec.Command("rundll32", "url.dll,FileProtocolHandler", absPath).Start()
+		case "darwin":
+			cmdErr = exec.Command("open", absPath).Start()
+		default:
+			cmdErr = fmt.Errorf("unsupported platform")
+		}
+
+		if cmdErr != nil {
+			log.Printf("⚠️ Could not open directory: %v", cmdErr)
+			return c.Status(500).SendString(cmdErr.Error())
+		}
+		return c.SendStatus(200)
+	})
+
 	api.Get("/report", func(c *fiber.Ctx) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// Filter out ignored groups
+		var filteredSizeGroups []reporter.SizeGroup
+		for _, g := range s.report.SizeGroups {
+			if s.cache != nil && s.cache.IsGroupIgnored(g.Hash()) {
+				continue
+			}
+			filteredSizeGroups = append(filteredSizeGroups, g)
+		}
+
+		var filteredSimilarGroups []reporter.SimilarityGroup
+		for _, g := range s.report.SimilarGroups {
+			if s.cache != nil && s.cache.IsGroupIgnored(g.Hash()) {
+				continue
+			}
+			filteredSimilarGroups = append(filteredSimilarGroups, g)
+		}
+
+		var filteredVisualGroups []reporter.SimilarityGroup
+		for _, g := range s.report.VisualGroups {
+			if s.cache != nil && s.cache.IsGroupIgnored(g.Hash()) {
+				continue
+			}
+			filteredVisualGroups = append(filteredVisualGroups, g)
+		}
+
+		reportCopy := *s.report
+		reportCopy.SizeGroups = filteredSizeGroups
+		reportCopy.SimilarGroups = filteredSimilarGroups
+		reportCopy.VisualGroups = filteredVisualGroups
+
 		if c.Query("exclude_similar") == "true" {
-			// Create a copy without similar groups
-			reportCopy := *s.report
 			reportCopy.SimilarGroups = nil
 			return c.Status(200).JSON(reportCopy)
 		}
-		return c.Status(200).JSON(s.report)
+		return c.Status(200).JSON(reportCopy)
+	})
+
+	api.Post("/mark-as-good", func(c *fiber.Ctx) error {
+		type markRequest struct {
+			Files []reporter.FileInfo `json:"files"`
+		}
+		var req markRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).SendString("Invalid request body")
+		}
+
+		if len(req.Files) == 0 {
+			return c.Status(400).SendString("No files provided")
+		}
+
+		hash := reporter.CalculateGroupHash(req.Files)
+		log.Printf("👍 Marking group as good (ignored): %s", hash)
+
+		if s.cache != nil {
+			s.cache.AddIgnoredGroup(hash)
+		}
+
+		// Also remove it from memory immediately
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// Helper to filter groups
+		filterGroups := func(groups []reporter.SimilarityGroup) []reporter.SimilarityGroup {
+			var filtered []reporter.SimilarityGroup
+			for _, g := range groups {
+				if g.Hash() != hash {
+					filtered = append(filtered, g)
+				}
+			}
+			return filtered
+		}
+
+		s.report.SimilarGroups = filterGroups(s.report.SimilarGroups)
+		s.report.VisualGroups = filterGroups(s.report.VisualGroups)
+
+		// Filter size groups separately
+		var newSizeGroups []reporter.SizeGroup
+		for _, g := range s.report.SizeGroups {
+			if g.Hash() != hash {
+				newSizeGroups = append(newSizeGroups, g)
+			}
+		}
+		s.report.SizeGroups = newSizeGroups
+
+		return c.SendStatus(200)
 	})
 
 	api.Get("/stats", func(c *fiber.Ctx) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		return c.Status(200).JSON(fiber.Map{
 			"totalFiles": s.report.TotalFiles,
 			"duplicates": len(s.report.SizeGroups),

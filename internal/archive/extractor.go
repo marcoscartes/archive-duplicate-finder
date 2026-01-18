@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -606,15 +607,19 @@ func findFirstImageZIP(archivePath string) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("no image found")
 }
 
-func findLargestImageRAR(archivePath string) ([]byte, string, error) {
+func findLargestImageRAR(archivePath string) (largestData []byte, largestName string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️  RAR Recovery: Panic in findLargestImageRAR for %s: %v", archivePath, r)
+			err = fmt.Errorf("rar reader panic: %v", r)
+		}
+	}()
 	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
 		return nil, "", err
 	}
 	defer reader.Close()
 
-	var largestData []byte
-	var largestName string
 	var largestSize int64
 
 	for {
@@ -645,7 +650,13 @@ func findLargestImageRAR(archivePath string) ([]byte, string, error) {
 }
 
 // Keep old function for backwards compatibility
-func findFirstImageRAR(archivePath string) ([]byte, string, error) {
+func findFirstImageRAR(archivePath string) (data []byte, name string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️  RAR Recovery: Panic in findFirstImageRAR for %s: %v", archivePath, r)
+			err = fmt.Errorf("rar reader panic: %v", r)
+		}
+	}()
 	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
 		return nil, "", err
@@ -662,7 +673,7 @@ func findFirstImageRAR(archivePath string) ([]byte, string, error) {
 		}
 
 		if !header.IsDir && isImageFile(header.Name) {
-			data, err := io.ReadAll(reader)
+			data, err = io.ReadAll(reader)
 			if err == nil {
 				return data, header.Name, nil
 			}
@@ -766,8 +777,14 @@ func extractZIP(archivePath string) (map[string][]byte, error) {
 }
 
 // extractRAR extracts files from a RAR archive
-func extractRAR(archivePath string) (map[string][]byte, error) {
-	contents := make(map[string][]byte)
+func extractRAR(archivePath string) (contents map[string][]byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️  RAR Recovery: Panic in extractRAR for %s: %v", archivePath, r)
+			err = fmt.Errorf("rar reader panic: %v", r)
+		}
+	}()
+	contents = make(map[string][]byte)
 
 	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
@@ -978,14 +995,20 @@ func listFilesZIP(archivePath string) ([]PreviewInfo, error) {
 	return files, nil
 }
 
-func listFilesRAR(archivePath string) ([]PreviewInfo, error) {
+func listFilesRAR(archivePath string) (files []PreviewInfo, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️  RAR Recovery: Panic while reading %s: %v", archivePath, r)
+			err = fmt.Errorf("rar reader panic: %v", r)
+		}
+	}()
+
 	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
 
-	var files []PreviewInfo
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {

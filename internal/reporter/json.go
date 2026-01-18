@@ -1,10 +1,35 @@
 package reporter
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 )
+
+// CalculateHash returns a unique hash for the group based on member file paths
+func CalculateGroupHash(files []FileInfo) string {
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	sort.Strings(paths)
+
+	h := sha256.New()
+	for _, p := range paths {
+		h.Write([]byte(p))
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func (g SizeGroup) Hash() string {
+	return CalculateGroupHash(g.Files)
+}
+
+func (g SimilarityGroup) Hash() string {
+	return CalculateGroupHash(g.Files)
+}
 
 // Report represents the analysis results
 type Report struct {

@@ -29,6 +29,11 @@ func ProcessVisualHashes(files []scanner.ArchiveFile, cache *db.Cache, debug boo
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("🔥 CRITICAL RECOVERY: Analysis worker recovered from panic: %v", r)
+				}
+			}()
 			for f := range jobs {
 				modTime := f.ModTime.Format(time.RFC3339)
 

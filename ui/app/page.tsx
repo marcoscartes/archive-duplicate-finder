@@ -416,6 +416,33 @@ export default function Dashboard() {
     }
   }
 
+  const handleOpenDirectory = async () => {
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    try {
+      await fetch(`${apiHost}/api/open-directory`, { method: 'POST' })
+    } catch (err) {
+      console.error("Failed to open directory:", err)
+      alert("Error opening directory")
+    }
+  }
+
+  const handleMarkAsGood = async (e: React.MouseEvent, files: FileInfo[]) => {
+    e.stopPropagation()
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    try {
+      const response = await fetch(`${apiHost}/api/mark-as-good`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files })
+      })
+      if (!response.ok) throw new Error(await response.text())
+      fetchData() // Refresh data to hide the group
+    } catch (err) {
+      console.error("Failed to mark group as good:", err)
+      alert("Error: " + err)
+    }
+  }
+
   if (!mounted || loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white">
       <motion.div
@@ -699,9 +726,18 @@ export default function Dashboard() {
                           }`}
                       >
                         <div className="flex justify-between items-center mb-4">
-                          <span className={`text-[10px] font-black uppercase tracking-widest transition-colors ${isSelected ? 'text-blue-400' : 'text-blue-500/60'}`}>
-                            Group {((currentPage - 1) * itemsPerPage) + i + 1}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-black uppercase tracking-widest transition-colors ${isSelected ? 'text-blue-400' : 'text-blue-500/60'}`}>
+                              Group {((currentPage - 1) * itemsPerPage) + i + 1}
+                            </span>
+                            <button
+                              onClick={(e) => handleMarkAsGood(e, group.files)}
+                              className="p-1.5 hover:bg-green-500/20 rounded-lg text-green-500/40 hover:text-green-400 transition-all group/btn"
+                              title="Mark as GOOD (Files are same size but NOT duplicates)"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                           <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
                             Weight: {(group.size / (1024 * 1024)).toFixed(1)} MB
                           </span>
@@ -730,9 +766,18 @@ export default function Dashboard() {
                           }`}
                       >
                         <div className="flex justify-between items-center mb-4">
-                          <span className={`text-[10px] font-black uppercase tracking-widest truncate max-w-[70%] transition-colors ${isSelected ? 'text-cyan-400' : 'text-cyan-500/60'}`}>
-                            Cluster: {group.base_name || "Unknown"}
-                          </span>
+                          <div className="flex items-center gap-2 max-w-[70%]">
+                            <span className={`text-[10px] font-black uppercase tracking-widest truncate transition-colors ${isSelected ? 'text-cyan-400' : 'text-cyan-500/60'}`}>
+                              Cluster: {group.base_name || "Unknown"}
+                            </span>
+                            <button
+                              onClick={(e) => handleMarkAsGood(e, group.files)}
+                              className="p-1.5 hover:bg-green-500/20 rounded-lg text-green-500/40 hover:text-green-400 transition-all"
+                              title="Mark as GOOD (Files are NOT duplicates)"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                           <span className="text-xs font-bold bg-white/5 px-3 py-1 rounded-full text-gray-400 tracking-tighter">
                             {group.files.length} Files
                           </span>
@@ -762,9 +807,18 @@ export default function Dashboard() {
                           }`}
                       >
                         <div className="flex justify-between items-center mb-4">
-                          <span className={`text-[10px] font-black uppercase tracking-widest truncate max-w-[70%] transition-colors ${isSelected ? 'text-orange-400' : 'text-orange-500/60'}`}>
-                            Visual Perceptual Match: {group.base_name || "Unknown"}
-                          </span>
+                          <div className="flex items-center gap-2 max-w-[70%]">
+                            <span className={`text-[10px] font-black uppercase tracking-widest truncate transition-colors ${isSelected ? 'text-orange-400' : 'text-orange-500/60'}`}>
+                              Visual Perceptual Match: {group.base_name || "Unknown"}
+                            </span>
+                            <button
+                              onClick={(e) => handleMarkAsGood(e, group.files)}
+                              className="p-1.5 hover:bg-green-500/20 rounded-lg text-green-500/40 hover:text-green-400 transition-all"
+                              title="Mark as GOOD (Files are NOT duplicates)"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                           <div className="flex items-center gap-2">
                             <div className="px-2 py-0.5 rounded bg-orange-500/20 text-[10px] font-bold text-orange-400 uppercase tracking-widest border border-orange-500/30">
                               A.I. Confirmed
@@ -875,7 +929,10 @@ export default function Dashboard() {
                   <Trash2 className="w-4 h-4" />
                   Auto-Cleanup Oldest
                 </button>
-                <button className="w-full py-4 glass-card border-white/10 hover:border-blue-500/40 text-gray-400 hover:text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3">
+                <button
+                  onClick={handleOpenDirectory}
+                  className="w-full py-4 glass-card border-white/10 hover:border-blue-500/40 text-gray-400 hover:text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95"
+                >
                   <ExternalLink className="w-4 h-4" />
                   Browse Directory
                 </button>
