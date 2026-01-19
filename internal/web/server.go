@@ -2,8 +2,12 @@ package web
 
 import (
 	"archive-duplicate-finder/internal/archive"
+	"archive-duplicate-finder/internal/config"
 	"archive-duplicate-finder/internal/db"
 	"archive-duplicate-finder/internal/reporter"
+	"archive-duplicate-finder/internal/scanner"
+	"archive-duplicate-finder/internal/similarity"
+	"archive-duplicate-finder/internal/visual"
 	"fmt"
 	"log"
 	"os"
@@ -32,11 +36,12 @@ type Server struct {
 	cache         *db.Cache
 	previewSem    chan struct{}
 	scanDir       string
+	config        *config.AppConfig
 	mu            sync.Mutex
 }
 
 // NewServer creates a new web dashboard server
-func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), runVisualFunc func(), allFiles []reporter.FileInfo, cache *db.Cache, scanDir string) *Server {
+func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), runVisualFunc func(), allFiles []reporter.FileInfo, cache *db.Cache, scanDir string, appConfig *config.AppConfig) *Server {
 	return &Server{
 		addr:          fmt.Sprintf(":%d", port),
 		report:        report,
@@ -44,11 +49,19 @@ func NewServer(port int, report *reporter.Report, trashPath string, leaveRef boo
 		leaveRef:      leaveRef,
 		runStep3Func:  runStep3Func,
 		runVisualFunc: runVisualFunc,
-		allFiles:      allFiles,
+		allFiles:      allFileInfos(allFiles),
 		cache:         cache,
 		previewSem:    make(chan struct{}, 4), // Allow 4 concurrent extractions
 		scanDir:       scanDir,
+		config:        appConfig,
 	}
+}
+
+func allFileInfos(files []reporter.FileInfo) []reporter.FileInfo {
+	if files == nil {
+		return []reporter.FileInfo{}
+	}
+	return files
 }
 
 // SetDebug enables or disables debug mode
@@ -76,25 +89,27 @@ func (s *Server) Start() error {
 	api := app.Group("/api")
 
 	api.Post("/run-step-3", func(c *fiber.Ctx) error {
-		if s.runStep3Func != nil {
-			go s.runStep3Func()      // Run in background
-			return c.SendStatus(202) // Accepted
-		}
-		return c.Status(501).SendString("Step 3 runner not configured")
+		go s.RunStep3()
+		return c.SendStatus(202)
 	})
 
 	api.Post("/run-visual", func(c *fiber.Ctx) error {
-		if s.runVisualFunc != nil {
-			go s.runVisualFunc()     // Run in background
-			return c.SendStatus(202) // Accepted
-		}
-		return c.Status(501).SendString("Visual runner not configured")
+		go s.RunVisual()
+		return c.SendStatus(202)
 	})
 
 	api.Post("/open-directory", func(c *fiber.Ctx) error {
-		absPath, err := filepath.Abs(s.scanDir)
+		path := c.Query("path")
+		if path == "" {
+			path = s.scanDir
+		}
+		if path == "" && s.config != nil {
+			path = s.config.Directory
+		}
+
+		absPath, err := filepath.Abs(path)
 		if err != nil {
-			absPath = s.scanDir
+			absPath = path
 		}
 
 		log.Printf("📂 Opening directory in explorer: %s", absPath)
@@ -118,9 +133,61 @@ func (s *Server) Start() error {
 		return c.SendStatus(200)
 	})
 
+	api.Get("/config", func(c *fiber.Ctx) error {
+		return c.JSON(s.config)
+	})
+
+	api.Post("/config", func(c *fiber.Ctx) error {
+		var cfg config.AppConfig
+		if err := c.BodyParser(&cfg); err != nil {
+			return c.Status(400).SendString(err.Error())
+		}
+		s.mu.Lock()
+		s.config = &cfg
+		s.scanDir = cfg.Directory
+		s.trashPath = cfg.TrashPath
+		s.leaveRef = cfg.LeaveRef
+		s.mu.Unlock()
+
+		if err := config.SaveConfig(&cfg); err != nil {
+			return c.Status(500).SendString(err.Error())
+		}
+		return c.SendStatus(200)
+	})
+
+	api.Post("/start-scan", func(c *fiber.Ctx) error {
+		s.mu.Lock()
+		if s.report != nil && (s.report.Status == "analyzing" || s.report.Status == "analyzing_step3" || s.report.Status == "analyzing_visual") {
+			s.mu.Unlock()
+			return c.Status(400).SendString("Scan already in progress")
+		}
+
+		cfg := s.config
+		if cfg == nil {
+			s.mu.Unlock()
+			return c.Status(400).SendString("No configuration set")
+		}
+		s.mu.Unlock()
+
+		go s.performFullScan(cfg)
+		return c.SendStatus(202)
+	})
+
+	api.Post("/reset", func(c *fiber.Ctx) error {
+		s.mu.Lock()
+		s.report = nil
+		s.allFiles = []reporter.FileInfo{}
+		s.mu.Unlock()
+		return c.SendStatus(200)
+	})
+
 	api.Get("/report", func(c *fiber.Ctx) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+
+		if s.report == nil {
+			return c.Status(200).JSON(fiber.Map{"status": "idle"})
+		}
 
 		// Filter out ignored groups
 		var filteredSizeGroups []reporter.SizeGroup
@@ -212,6 +279,14 @@ func (s *Server) Start() error {
 	api.Get("/stats", func(c *fiber.Ctx) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.report == nil {
+			return c.Status(200).JSON(fiber.Map{
+				"totalFiles": 0,
+				"duplicates": 0,
+				"similar":    0,
+				"duration":   0,
+			})
+		}
 		return c.Status(200).JSON(fiber.Map{
 			"totalFiles": s.report.TotalFiles,
 			"duplicates": len(s.report.SizeGroups),
@@ -499,6 +574,206 @@ func (s *Server) Start() error {
 
 	log.Printf("🚀 Web Dashboard available at: http://localhost%s", s.addr)
 	return app.Listen(s.addr)
+}
+
+func (s *Server) performFullScan(cfg *config.AppConfig) {
+	log.Printf("🔍 Starting web-triggered scan: %s", cfg.Directory)
+	s.mu.Lock()
+	s.report = &reporter.Report{
+		Status: "analyzing",
+	}
+	s.allFiles = []reporter.FileInfo{}
+	s.mu.Unlock()
+
+	startTime := time.Now()
+	files, err := scanner.ScanDirectory(cfg.Directory, cfg.Recursive)
+	if err != nil {
+		log.Printf("❌ Scan failed: %v", err)
+		s.mu.Lock()
+		s.report.Status = "error"
+		s.mu.Unlock()
+		return
+	}
+
+	// Update allFiles for the gallery
+	var allFiles []reporter.FileInfo
+	for _, f := range files {
+		allFiles = append(allFiles, reporter.FileInfo{
+			Name:    f.Name,
+			Path:    f.Path,
+			Size:    f.Size,
+			Type:    f.Type,
+			ModTime: f.ModTime.Format(time.RFC3339),
+		})
+	}
+
+	sizeGroups := scanner.GroupBySize(files)
+	var finalSizeGroups []reporter.SizeGroup
+	for size, group := range sizeGroups {
+		if len(group) < 2 {
+			continue
+		}
+		var currentGroup reporter.SizeGroup
+		currentGroup.Size = size
+		for _, f := range group {
+			currentGroup.Files = append(currentGroup.Files, reporter.FileInfo{
+				Name:    f.Name,
+				Path:    f.Path,
+				Size:    f.Size,
+				Type:    f.Type,
+				ModTime: f.ModTime.Format(time.RFC3339),
+			})
+		}
+		finalSizeGroups = append(finalSizeGroups, currentGroup)
+	}
+
+	s.mu.Lock()
+	s.report.TotalFiles = len(files)
+	s.report.SizeGroups = finalSizeGroups
+	s.report.AnalysisDuration = time.Since(startTime).Seconds()
+	s.allFiles = allFiles
+	s.report.Status = "finished"
+	s.mu.Unlock()
+
+	log.Printf("✅ Scan completed. Found %d files and %d size groups.", len(files), len(finalSizeGroups))
+
+	// Trigger similarity automatically if configured? (Maybe later)
+}
+
+func (s *Server) RunStep3() {
+	s.mu.Lock()
+	if s.report == nil {
+		s.mu.Unlock()
+		return
+	}
+	if s.report.Status == "analyzing_step3" {
+		s.mu.Unlock()
+		return
+	}
+	s.report.Status = "analyzing_step3"
+	s.report.Progress = 0
+	scanDir := s.scanDir
+	threshold := 70
+	if s.config != nil {
+		threshold = s.config.Threshold
+	}
+	s.mu.Unlock()
+
+	log.Printf("📝 Web-triggered Step 3 analysis started...")
+	startTime := time.Now()
+
+	// Need scanner.ArchiveFile objects.
+	files, _ := scanner.ScanDirectory(scanDir, true)
+
+	onProgress := func(p float64) {
+		s.mu.Lock()
+		s.report.Progress = p
+		s.mu.Unlock()
+	}
+
+	simGroups := similarity.FindSimilarGroups(files, threshold, s.debug, onProgress)
+
+	var results []reporter.SimilarityGroup
+	for _, g := range simGroups {
+		var fileInfos []reporter.FileInfo
+		for _, f := range g.Files {
+			fileInfos = append(fileInfos, reporter.FileInfo{
+				Name:    f.Name,
+				Path:    f.Path,
+				Size:    f.Size,
+				Type:    f.Type,
+				ModTime: f.ModTime.Format(time.RFC3339),
+			})
+		}
+		results = append(results, reporter.SimilarityGroup{
+			BaseName: g.BaseName,
+			Files:    fileInfos,
+		})
+	}
+
+	s.mu.Lock()
+	s.report.SimilarGroups = results
+	s.report.SimilarCount = len(results)
+	s.report.AnalysisDuration += time.Since(startTime).Seconds()
+	s.report.Status = "finished"
+	s.mu.Unlock()
+	log.Printf("✅ Step 3 finished. Found %d clusters.", len(results))
+}
+
+func (s *Server) RunVisual() {
+	s.mu.Lock()
+	if s.report == nil || s.report.Status == "analyzing_visual" {
+		s.mu.Unlock()
+		return
+	}
+	s.report.Status = "analyzing_visual"
+	s.report.Progress = 0
+	scanDir := s.scanDir
+	threshold := 70
+	if s.config != nil {
+		threshold = s.config.Threshold
+	}
+	s.mu.Unlock()
+
+	log.Printf("🎨 Web-triggered Visual analysis started...")
+
+	files, _ := scanner.ScanDirectory(scanDir, true)
+
+	hashDone := make(chan bool)
+	go func() {
+		onVisualProgress := func(p float64) {
+			s.mu.Lock()
+			s.report.Progress = p
+			s.mu.Unlock()
+		}
+		visual.ProcessVisualHashes(files, s.cache, s.debug, onVisualProgress)
+		hashDone <- true
+	}()
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	updateVisualGroups := func() {
+		visualGroups := visual.FindVisualDuplicates(files, s.cache, threshold)
+		var reporterVisualGroups []reporter.SimilarityGroup
+		for _, vg := range visualGroups {
+			var fileInfos []reporter.FileInfo
+			for _, f := range vg.Files {
+				fileInfos = append(fileInfos, reporter.FileInfo{
+					Name:    f.Name,
+					Path:    f.Path,
+					Size:    f.Size,
+					Type:    f.Type,
+					ModTime: f.ModTime,
+					PHash:   f.PHash,
+				})
+			}
+			reporterVisualGroups = append(reporterVisualGroups, reporter.SimilarityGroup{
+				BaseName: vg.BaseName,
+				Files:    fileInfos,
+			})
+		}
+		s.mu.Lock()
+		s.report.VisualGroups = reporterVisualGroups
+		s.report.VisualCount = len(reporterVisualGroups)
+		s.mu.Unlock()
+	}
+
+loop:
+	for {
+		select {
+		case <-hashDone:
+			updateVisualGroups()
+			break loop
+		case <-ticker.C:
+			updateVisualGroups()
+		}
+	}
+
+	s.mu.Lock()
+	s.report.Status = "finished"
+	s.mu.Unlock()
+	log.Printf("✅ Visual analysis finished.")
 }
 
 func getContentType(filename string) string {

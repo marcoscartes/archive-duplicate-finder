@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"archive-duplicate-finder/internal/config"
 	"archive-duplicate-finder/internal/db"
 	"archive-duplicate-finder/internal/reporter"
 	"archive-duplicate-finder/internal/scanner"
@@ -47,27 +48,66 @@ type Config struct {
 }
 
 func main() {
-	// Parse command line flags
-	config := parseFlags()
+	// 1. Load Persistent Config
+	appConfig, _ := config.LoadConfig()
+
+	// 2. Parse command line flags (can override appConfig)
+	flagConfig := parseFlags()
 
 	// Configure logger with timestamps
 	log.SetFlags(log.Ldate | log.Ltime)
 
+	// Determine if we should run a CLI scan immediately
+	isExplicitScan := false
+	visitCount := 0
+	flag.Visit(func(f *flag.Flag) {
+		visitCount++
+		if f.Name == "dir" {
+			isExplicitScan = true
+		}
+	})
+
+	// If no flags at all and no saved directory, we MUST start in web setup mode
+	if visitCount == 0 && appConfig.Directory == "" {
+		log.Println("🌐 No configuration found. Starting web setup mode...")
+		startWebServer(flagConfig, nil, nil, nil, appConfig, nil, nil)
+		// Block indefinitely
+		select {}
+	}
+
+	// If no flags but we HAVE a saved config, load it into flagConfig and start web
+	if visitCount == 0 && appConfig.Directory != "" {
+		log.Printf("📂 Loading saved configuration: %s", appConfig.Directory)
+		flagConfig.Directory = appConfig.Directory
+		flagConfig.TrashPath = appConfig.TrashPath
+		flagConfig.Threshold = appConfig.Threshold
+		flagConfig.Recursive = appConfig.Recursive
+		flagConfig.LeaveRef = appConfig.LeaveRef
+		flagConfig.Web = true // Default to web if launched without args
+	}
+
 	// Validate directory
-	if _, err := os.Stat(config.Directory); os.IsNotExist(err) {
-		log.Fatalf("❌ Directory does not exist: %s", config.Directory)
+	if _, err := os.Stat(flagConfig.Directory); os.IsNotExist(err) {
+		if isExplicitScan {
+			log.Fatalf("❌ Directory does not exist: %s", flagConfig.Directory)
+		} else {
+			log.Printf("⚠️ Saved directory no longer exists: %s. Starting web setup...", flagConfig.Directory)
+			startWebServer(flagConfig, nil, nil, nil, appConfig, nil, nil)
+			// Block indefinitely
+			select {}
+		}
 	}
 
 	log.Printf("🔍 Archive Duplicate Finder")
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	log.Printf("📂 Scanning directory: %s", config.Directory)
-	log.Printf("🎯 Similarity threshold: %d%%", config.Threshold)
-	log.Printf("🔧 Mode: %s", config.Mode)
-	if config.Debug {
+	log.Printf("📂 Scanning directory: %s", flagConfig.Directory)
+	log.Printf("🎯 Similarity threshold: %d%%", flagConfig.Threshold)
+	log.Printf("🔧 Mode: %s", flagConfig.Mode)
+	if flagConfig.Debug {
 		log.Printf("🐛 DEBUG MODE: Enabled (Detailed Tracing)")
 	}
-	if config.DeleteMode != "" {
-		log.Printf("🗑️  Cleanup Mode: %s (Auto: %v)", config.DeleteMode, config.AutoDelete)
+	if flagConfig.DeleteMode != "" {
+		log.Printf("🗑️  Cleanup Mode: %s (Auto: %v)", flagConfig.DeleteMode, flagConfig.AutoDelete)
 	}
 	fmt.Printf("\n")
 
@@ -75,7 +115,7 @@ func main() {
 
 	// Step 1: Scan for archive files
 	log.Println("📦 Step 1: Scanning for archive files...")
-	files, err := scanner.ScanDirectory(config.Directory, config.Recursive)
+	files, err := scanner.ScanDirectory(flagConfig.Directory, flagConfig.Recursive)
 	if err != nil {
 		log.Fatalf("❌ Failed to scan directory: %v", err)
 	}
@@ -106,16 +146,16 @@ func main() {
 	// Step 2: Identical Size
 	sizeGroups := scanner.GroupBySize(files)
 	var finalSizeGroups []reporter.SizeGroup
-	if config.Mode == "all" || config.Mode == "size" {
+	if flagConfig.Mode == "all" || flagConfig.Mode == "size" {
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		log.Println("🔄 Step 2: Analyzing identical sizes...")
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		finalSizeGroups = analyzeSameSizeDifferentName(sizeGroups, config.Threshold, config.Verbose, config)
+		finalSizeGroups = analyzeSameSizeDifferentName(sizeGroups, flagConfig.Threshold, flagConfig.Verbose, flagConfig)
 
-		if config.PDFFile != "" {
+		if flagConfig.PDFFile != "" {
 			report2 := baseReport
 			report2.SizeGroups = finalSizeGroups
-			pdfName := "Step2_Size_" + config.PDFFile
+			pdfName := "Step2_Size_" + flagConfig.PDFFile
 			fmt.Printf("\n📄 [BETA] Generating Step 2 PDF: %s\n", pdfName)
 			reporter.ExportPDF(report2, pdfName)
 		}
@@ -135,14 +175,14 @@ func main() {
 
 		onProgress := func(p float64) {
 			finalReport.Progress = p
-			if !config.Web {
+			if !flagConfig.Web {
 				fmt.Printf("\r🔍 Similar Names: [%-20s] %.1f%%", strings.Repeat("=", int(p/5)), p)
 			}
 		}
 
-		simGroups := similarity.FindSimilarGroups(files, config.Threshold, config.Debug, onProgress)
+		simGroups := similarity.FindSimilarGroups(files, flagConfig.Threshold, flagConfig.Debug, onProgress)
 
-		if !config.Web {
+		if !flagConfig.Web {
 			fmt.Println()
 		}
 
@@ -186,9 +226,9 @@ func main() {
 
 		log.Printf("✅ Step 3 analysis FINISHED. Found %d similarity clusters.", len(results))
 
-		if !config.Web {
+		if !flagConfig.Web {
 			for i, g := range results {
-				if i >= 10 && !config.Verbose {
+				if i >= 10 && !flagConfig.Verbose {
 					if i == 10 {
 						fmt.Println("... (Use --verbose to see all groups)")
 					}
@@ -217,12 +257,12 @@ func main() {
 		go func() {
 			onVisualProgress := func(p float64) {
 				finalReport.Progress = p
-				if !config.Web {
+				if !flagConfig.Web {
 					fmt.Printf("\r🌆 Visual Hashing: [%-20s] %.1f%%",
 						strings.Repeat("=", int(p/5)), p)
 				}
 			}
-			visual.ProcessVisualHashes(files, cache, config.Debug, onVisualProgress)
+			visual.ProcessVisualHashes(files, cache, flagConfig.Debug, onVisualProgress)
 			hashDone <- true
 		}()
 
@@ -230,7 +270,7 @@ func main() {
 		defer ticker.Stop()
 
 		updateVisualGroups := func() {
-			visualGroups := visual.FindVisualDuplicates(files, cache, config.Threshold)
+			visualGroups := visual.FindVisualDuplicates(files, cache, flagConfig.Threshold)
 			var reporterVisualGroups []reporter.SimilarityGroup
 			for _, vg := range visualGroups {
 				var fileInfos []reporter.FileInfo
@@ -257,7 +297,7 @@ func main() {
 		for {
 			select {
 			case <-hashDone:
-				if !config.Web {
+				if !flagConfig.Web {
 					fmt.Println()
 				}
 				updateVisualGroups()
@@ -271,8 +311,8 @@ func main() {
 		log.Printf("✅ Visual analysis FINISHED. Found %d visual duplicate groups total.", finalReport.VisualCount)
 	}
 
-	if config.Mode == "all" || config.Mode == "name" {
-		if config.Interactive {
+	if flagConfig.Mode == "all" || flagConfig.Mode == "name" {
+		if flagConfig.Interactive {
 			// Interactive mode force
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			log.Println("📝 Step 3: Similar name analysis (Interactive Mode)")
@@ -283,9 +323,9 @@ func main() {
 			finalReport.Status = "finished"
 		} else {
 			// Background / On-Demand Mode
-			if config.RunStep3 {
+			if flagConfig.RunStep3 {
 				fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-				if config.Web {
+				if flagConfig.Web {
 					log.Println("📝 Step 3: Similar name analysis started in BACKGROUND...")
 					fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 					go runStep3Trigger()
@@ -304,7 +344,7 @@ func main() {
 	}
 
 	// Start web dashboard
-	if config.Web {
+	if flagConfig.Web {
 		// Convert scanner.ArchiveFile to reporter.FileInfo for the dashboard
 		var allFileInfos []reporter.FileInfo
 		for _, f := range files {
@@ -317,31 +357,36 @@ func main() {
 			})
 		}
 
-		srv := web.NewServer(config.Port, finalReport, config.TrashPath, config.LeaveRef, runStep3Trigger, runVisualTrigger, allFileInfos, cache, config.Directory)
-		srv.SetDebug(config.Debug)
-		go func() {
-			if err := srv.Start(); err != nil {
-				log.Printf("❌ Web server error: %v", err)
-			}
-		}()
-
-		// Auto-open browser
-		go func() {
-			time.Sleep(1 * time.Second) // Give server a moment to bind
-			url := fmt.Sprintf("http://localhost:%d", config.Port)
-			log.Printf("🌍 Opening dashboard at %s ...", url)
-			openBrowser(url)
-		}()
+		startWebServer(flagConfig, finalReport, allFileInfos, cache, appConfig, runStep3Trigger, runVisualTrigger)
 	}
 
 	elapsedTotal := time.Since(startTime)
 	log.Printf("📈 Total processing time: %.2fs", elapsedTotal.Seconds())
 
 	// If web server is running, block indefinitely
-	if config.Web {
+	if flagConfig.Web {
 		log.Println("📡 Dashboard is ACTIVE. Press Ctrl+C to shutdown.")
 		select {}
 	}
+}
+
+func startWebServer(config Config, report *reporter.Report, allFiles []reporter.FileInfo, cache *db.Cache, appConfig *config.AppConfig, runStep3 func(), runVisual func()) {
+	// Set triggers for on-demand analysis if needed
+	srv := web.NewServer(config.Port, report, config.TrashPath, config.LeaveRef, runStep3, runVisual, allFiles, cache, config.Directory, appConfig)
+	srv.SetDebug(config.Debug)
+	go func() {
+		if err := srv.Start(); err != nil {
+			log.Printf("❌ Web server error: %v", err)
+		}
+	}()
+
+	// Auto-open browser
+	go func() {
+		time.Sleep(1 * time.Second) // Give server a moment to bind
+		url := fmt.Sprintf("http://localhost:%d", config.Port)
+		log.Printf("🌍 Opening dashboard at %s ...", url)
+		openBrowser(url)
+	}()
 }
 
 func parseFlags() Config {

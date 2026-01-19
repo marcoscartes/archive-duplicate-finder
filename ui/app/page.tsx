@@ -53,6 +53,135 @@ interface Report {
   progress?: number
 }
 
+interface AppConfig {
+  directory: string
+  trash_path: string
+  threshold: number
+  recursive: boolean
+  leave_ref: boolean
+  delete_mode: string
+}
+
+function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => void, isLoading: boolean }) {
+  const [config, setConfig] = useState<AppConfig>({
+    directory: '',
+    trash_path: '',
+    threshold: 70,
+    recursive: true,
+    leave_ref: false,
+    delete_mode: 'oldest'
+  })
+
+  useEffect(() => {
+    // Load existing config if any
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    fetch(`${apiHost}/api/config`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.directory) setConfig(data)
+      })
+      .catch(err => console.error("Failed to load config:", err))
+  }, [])
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0c] text-white flex items-center justify-center p-6">
+      <motion.div
+        initial={{ opacity: 0, y: 30 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-2xl glass-card p-10 rounded-[2.5rem] border border-blue-500/20 shadow-2xl shadow-blue-500/10"
+      >
+        <div className="flex items-center gap-4 mb-10">
+          <div className="w-16 h-16 rounded-2xl bg-blue-600/20 flex items-center justify-center border border-blue-500/30">
+            <Box className="w-8 h-8 text-blue-400" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-black tracking-tight">ANALYSIS SETUP</h1>
+            <p className="text-gray-500 font-medium">Configure your workspace intelligence</p>
+          </div>
+        </div>
+
+        <div className="space-y-8">
+          <div className="space-y-3">
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Scan Directory</label>
+            <div className="relative group">
+              <Folder className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-blue-500 transition-colors" />
+              <input
+                type="text"
+                placeholder="C:\Users\...\MyAssets"
+                value={config.directory}
+                onChange={(e) => setConfig({ ...config, directory: e.target.value })}
+                className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-3">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Trash Folder (Optional)</label>
+              <div className="relative group">
+                <Trash2 className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-red-500 transition-colors" />
+                <input
+                  type="text"
+                  placeholder="C:\...\Trash"
+                  value={config.trash_path}
+                  onChange={(e) => setConfig({ ...config, trash_path: e.target.value })}
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-red-500/50 focus:bg-white/[0.08] transition-all"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Similarity threshold (%)</label>
+              <div className="relative group">
+                <Filter className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-cyan-500 transition-colors" />
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={config.threshold}
+                  onChange={(e) => setConfig({ ...config, threshold: parseInt(e.target.value) || 0 })}
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-cyan-500/50 focus:bg-white/[0.08] transition-all"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-8 items-center bg-white/5 p-6 rounded-3xl border border-white/10">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${config.recursive ? 'bg-blue-600 border-blue-600 shadow-lg shadow-blue-500/20' : 'border-white/10 group-hover:border-white/30'}`} onClick={() => setConfig({ ...config, recursive: !config.recursive })}>
+                {config.recursive && <CheckCircle2 className="w-4 h-4 text-white" />}
+              </div>
+              <span className="text-xs font-bold uppercase tracking-widest text-gray-400">Recursive Scan</span>
+            </label>
+
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${config.leave_ref ? 'bg-purple-600 border-purple-600 shadow-lg shadow-purple-500/20' : 'border-white/10 group-hover:border-white/30'}`} onClick={() => setConfig({ ...config, leave_ref: !config.leave_ref })}>
+                {config.leave_ref && <CheckCircle2 className="w-4 h-4 text-white" />}
+              </div>
+              <span className="text-xs font-bold uppercase tracking-widest text-gray-400">Leave Reference TXT</span>
+            </label>
+          </div>
+
+          <button
+            onClick={() => onStart(config)}
+            disabled={!config.directory || isLoading}
+            className="w-full py-6 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-3xl text-sm font-black uppercase tracking-[0.3em] text-white shadow-2xl shadow-blue-500/20 transition-all active:scale-95 flex items-center justify-center gap-4 disabled:opacity-50 disabled:grayscale transition-all"
+          >
+            {isLoading ? (
+              <Loader2 className="w-6 h-6 animate-spin" />
+            ) : (
+              <>
+                <Zap className="w-6 h-6" />
+                Initialize Scanner Intelligence
+              </>
+            )}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 function PreviewImage({ path }: { path: string }) {
   const [error, setError] = useState(false)
   const [isHovering, setIsHovering] = useState(true)
@@ -443,6 +572,28 @@ export default function Dashboard() {
     }
   }
 
+  const [savingConfig, setSavingConfig] = useState(false)
+  const handleStartScan = async (config: AppConfig) => {
+    setSavingConfig(true)
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    try {
+      // 1. Save Config
+      await fetch(`${apiHost}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      })
+      // 2. Start Scan
+      await fetch(`${apiHost}/api/start-scan`, { method: 'POST' })
+      fetchData()
+    } catch (err) {
+      console.error("Failed to start scan:", err)
+      alert("Error starting scan: " + err)
+    } finally {
+      setSavingConfig(false)
+    }
+  }
+
   if (!mounted || loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white">
       <motion.div
@@ -467,6 +618,10 @@ export default function Dashboard() {
         Retry Connection
       </button>
     </div>
+  )
+
+  if (data?.status === 'idle') return (
+    <SetupView onStart={handleStartScan} isLoading={savingConfig} />
   )
 
   const stats = [
@@ -494,6 +649,16 @@ export default function Dashboard() {
           </div>
           <div className="flex gap-4">
             <div className="flex items-center gap-4">
+              <button
+                onClick={async () => {
+                  const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+                  await fetch(`${apiHost}/api/reset`, { method: 'POST' })
+                  window.location.reload()
+                }}
+                className="px-6 py-3 bg-red-500/10 hover:bg-red-500/20 rounded-2xl text-sm font-medium text-red-400 transition-all border border-red-500/20"
+              >
+                🆕 New Scan
+              </button>
               <Link href="/gallery">
                 <button className="px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-2xl text-sm font-bold text-white transition-all border border-blue-500/20 shadow-lg shadow-blue-500/20 flex items-center gap-2">
                   <Grid3x3 className="w-5 h-5" />
@@ -529,11 +694,11 @@ export default function Dashboard() {
             />
           </div>
 
-          <div className="flex flex-wrap gap-3 items-center flex-grow sm:flex-grow-0">
-            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5">
+          <div className="flex flex-wrap gap-3 items-center w-full justify-between">
+            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5 flex-grow sm:flex-grow-0">
               <button
                 onClick={() => setViewMode('size')}
-                className={`px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center gap-3 whitespace-nowrap ${viewMode === 'size'
+                className={`flex-1 sm:flex-none px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center justify-center gap-3 whitespace-nowrap ${viewMode === 'size'
                   ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
                   : 'text-gray-500 hover:text-gray-300'
                   }`}
@@ -543,7 +708,7 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={() => setViewMode('similar')}
-                className={`px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center gap-3 whitespace-nowrap ${viewMode === 'similar'
+                className={`flex-1 sm:flex-none px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center justify-center gap-3 whitespace-nowrap ${viewMode === 'similar'
                   ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20'
                   : 'text-gray-500 hover:text-gray-300'
                   }`}
@@ -553,7 +718,7 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={() => setViewMode('visual')}
-                className={`px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center gap-3 whitespace-nowrap ${viewMode === 'visual'
+                className={`flex-1 sm:flex-none px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center justify-center gap-3 whitespace-nowrap ${viewMode === 'visual'
                   ? 'bg-orange-600 text-white shadow-lg shadow-orange-500/20'
                   : 'text-gray-500 hover:text-gray-300'
                   }`}
@@ -563,21 +728,7 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <div className="relative flex-grow sm:flex-grow-0">
-              <select
-                value={itemsPerPage}
-                onChange={(e) => setItemsPerPage(Number(e.target.value))}
-                className="appearance-none w-full bg-white/5 border border-white/5 rounded-3xl px-8 py-4 text-sm font-bold uppercase tracking-wide text-gray-400 focus:outline-none focus:border-blue-500/50 transition-all cursor-pointer min-w-[160px]"
-              >
-                <option value={10}>10 Per Page</option>
-                <option value={20}>20 Per Page</option>
-                <option value={50}>50 Per Page</option>
-                <option value={100}>100 Per Page</option>
-              </select>
-              <Filter className="absolute right-5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600 pointer-events-none" />
-            </div>
-
-            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5 h-full overflow-x-auto max-w-full">
+            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5 overflow-x-auto max-w-full">
               {fileTypes.map(type => (
                 <button
                   key={type}
@@ -903,6 +1054,20 @@ export default function Dashboard() {
                   >
                     <Zap className="w-4 h-4" />
                   </button>
+
+                  <div className="relative ml-4">
+                    <select
+                      value={itemsPerPage}
+                      onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                      className="appearance-none bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 focus:outline-none focus:border-blue-500/50 transition-all cursor-pointer pr-8 hover:bg-white/10 hover:text-gray-200"
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                    <Filter className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                  </div>
                 </div>
               )}
             </section>
