@@ -17,11 +17,12 @@
 
 - **⚡ Lightning Fast Caching:** SQLite-backed persistence remembers your duplicates to skip re-scanning.
 - **🧠 Intelligent Clustering:** New O(N) algorithm groups similar filenames instantly, handling 100,000+ files in seconds.
-- **� Smart Pagination:** Smoothly handles massive datasets with configurable page sizes (10, 20, 50, 100).
+- **💼 Fully Portable:** Configuration is now saved alongside the executable (`archive-finder-settings.json`), making it perfect for USB drives.
+- **🧙 Setup Wizard:** New intelligent startup flow. If no config exists, a beautiful setup screen guides you.
 - **🔔 Live Notifications:** Receive browser alerts when background analysis finishes.
 - **🖼️ Archive Intelligence 3.0:** Deep-recursive extraction with **internal browsing**. View ALL images and STL models inside an archive without extracting them. Now supporting **25+ formats** including `.fbx`, `.blend`, `.gltf`, `.glb`, `.3mf`, `.step`, `.iso` and more.
 - **🎨 Cinematic Gallery Experience:** 3x3 adaptive layout with a new **Global Viewer** featuring fluid navigation, keyboard controls, and an **Internal File Selector**. Now including **advanced sorting** and **extension filtering**.
-- **�🔬 Advanced 3D Geometry Studio:** Integrated professional CAD-viewer using Three.js. Features:
+- **🔬 Advanced 3D Geometry Studio:** Integrated professional CAD-viewer using Three.js. Features:
   - **Smart Comparison:** Stacks multiple models vertically for structural analysis.
   - **Immersive Mode:** Professional Fullscreen view with "Stage" lighting, contact shadows, and realistic PBR materials.
   - **Auto-Normalization:** Intelligent scaling to compare models of vastly different units (mm vs inches) side-by-side.
@@ -30,7 +31,8 @@
 - **🛡️ Multi-volume Protection:** Automatically protects split archives (part1, part2, .001) from deletion.
 - **🗑️ Trash Mode:** Move duplicates to a safe folder instead of permanent deletion.
 - **📝 Reference Tracking:** Leave a `.txt` file pointing to the location of the preserved original.
-- **🕹️ Interactive Mode:** Take control and decide manually which duplicates to keep or remove.
+- **✅ Mark as Good:** Permanently ignore specific groups of files from future reports directly from the UI.
+- **🔄 Dynamic Rescan:** Start a new scan with different settings without restarting the application.
 - **📄 Pro Reporting:** Generates instant PDF reports even while background analysis is running.
 
 ---
@@ -65,10 +67,16 @@ cd ..
 
 ### Web Dashboard (Recommended)
 ```bash
-# Launch the premium web interface
+# Just run the executable!
+./archive-finder
+```
+*If it's your first run, the **Setup Wizard** will launch automatically in your browser.*
+
+### Legacy CLI Mode
+The tool retains full backward compatibility for automation:
+```bash
 ./archive-finder -dir "D:/Archives" -web
 ```
-*Step 3 (Similarity Analysis) is now on-demand from the dashboard for massive performance gains.*
 
 ### Safe Cleanup
 ```bash
