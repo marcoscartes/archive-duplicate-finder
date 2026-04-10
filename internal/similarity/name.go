@@ -2,6 +2,7 @@ package similarity
 
 import (
 	"archive-duplicate-finder/internal/scanner"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -149,15 +150,24 @@ func generateCanonicalKey(name string) string {
 }
 
 func areAllMultiVolumePartsOfSameSet(files []scanner.ArchiveFile) bool {
-	countPart := 0
-	for _, f := range files {
-		lower := strings.ToLower(f.Name)
-		if strings.Contains(lower, ".part") || strings.Contains(lower, ".z0") || strings.Contains(lower, ".00") {
-			countPart++
-		}
+	if len(files) < 2 {
+		return false
 	}
-	// If more than 50% are 'parts', it's likely a split archive
-	return countPart > 1 && countPart == len(files)
+
+	sets := make(map[string]int)
+	for _, f := range files {
+		isPart, base, _ := f.IsMultiVolumePart()
+		if !isPart {
+			return false // At least one is not a part, so the group might be valid
+		}
+		// Set ID includes directory to distinguish parts of the same archive
+		setID := filepath.Join(filepath.Dir(f.Path), base)
+		sets[setID]++
+	}
+
+	// If there's only one set represented, they are just parts of that archive
+	// If there are multiple sets, it means we found parts with similar names across different sets/folders
+	return len(sets) == 1
 }
 
 // CalculateNameSimilarity is kept for compatibility if needed elsewhere

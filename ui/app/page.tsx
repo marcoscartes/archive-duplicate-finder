@@ -20,7 +20,13 @@ import {
   Image as ImageIcon,
   Loader2,
   Folder,
-  Grid3x3
+  Grid3x3,
+  Moon,
+  Sun,
+  ArrowUp01,
+  ArrowDown01,
+  Settings,
+  HardDrive
 } from 'lucide-react'
 import ModelPreview from '@/components/ModelPreview'
 
@@ -30,6 +36,7 @@ interface FileInfo {
   size: number
   mod_time: string
   p_hash?: number
+  visual_score?: number
 }
 
 interface SizeGroup {
@@ -84,7 +91,7 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
   }, [])
 
   return (
-    <div className="min-h-screen bg-[#0a0a0c] text-white flex items-center justify-center p-6">
+    <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-6">
       <motion.div
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
@@ -96,7 +103,7 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
           </div>
           <div>
             <h1 className="text-3xl font-black tracking-tight">ANALYSIS SETUP</h1>
-            <p className="text-gray-500 font-medium">Configure your workspace intelligence</p>
+            <p className="text-gray-600 dark:text-gray-500 font-medium">Configure your workspace intelligence</p>
           </div>
         </div>
 
@@ -110,7 +117,7 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
                 placeholder="C:\Users\...\MyAssets"
                 value={config.directory}
                 onChange={(e) => setConfig({ ...config, directory: e.target.value })}
-                className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
+                className="w-full bg-glass-layer border border-glass-border rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-glass-layer transition-all"
               />
             </div>
           </div>
@@ -125,7 +132,7 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
                   placeholder="C:\...\Trash"
                   value={config.trash_path}
                   onChange={(e) => setConfig({ ...config, trash_path: e.target.value })}
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-red-500/50 focus:bg-white/[0.08] transition-all"
+                  className="w-full bg-glass-layer border border-glass-border rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-red-500/50 focus:bg-glass-layer transition-all"
                 />
               </div>
             </div>
@@ -140,25 +147,25 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
                   max="100"
                   value={config.threshold}
                   onChange={(e) => setConfig({ ...config, threshold: parseInt(e.target.value) || 0 })}
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-cyan-500/50 focus:bg-white/[0.08] transition-all"
+                  className="w-full bg-glass-layer border border-glass-border rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-cyan-500/50 focus:bg-glass-layer transition-all"
                 />
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-8 items-center bg-white/5 p-6 rounded-3xl border border-white/10">
+          <div className="flex flex-wrap gap-8 items-center bg-glass-layer p-6 rounded-3xl border border-glass-border">
             <label className="flex items-center gap-3 cursor-pointer group">
-              <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${config.recursive ? 'bg-blue-600 border-blue-600 shadow-lg shadow-blue-500/20' : 'border-white/10 group-hover:border-white/30'}`} onClick={() => setConfig({ ...config, recursive: !config.recursive })}>
+              <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${config.recursive ? 'bg-blue-600 border-blue-600 shadow-lg shadow-blue-500/20' : 'border-glass-border group-hover:border-blue-500/40'}`} onClick={() => setConfig({ ...config, recursive: !config.recursive })}>
                 {config.recursive && <CheckCircle2 className="w-4 h-4 text-white" />}
               </div>
-              <span className="text-xs font-bold uppercase tracking-widest text-gray-400">Recursive Scan</span>
+              <span className="text-xs font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400">Recursive Scan</span>
             </label>
 
             <label className="flex items-center gap-3 cursor-pointer group">
-              <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${config.leave_ref ? 'bg-purple-600 border-purple-600 shadow-lg shadow-purple-500/20' : 'border-white/10 group-hover:border-white/30'}`} onClick={() => setConfig({ ...config, leave_ref: !config.leave_ref })}>
+              <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${config.leave_ref ? 'bg-purple-600 border-purple-600 shadow-lg shadow-purple-500/20' : 'border-glass-border group-hover:border-purple-500/40'}`} onClick={() => setConfig({ ...config, leave_ref: !config.leave_ref })}>
                 {config.leave_ref && <CheckCircle2 className="w-4 h-4 text-white" />}
               </div>
-              <span className="text-xs font-bold uppercase tracking-widest text-gray-400">Leave Reference TXT</span>
+              <span className="text-xs font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400">Leave Reference TXT</span>
             </label>
           </div>
 
@@ -183,27 +190,71 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
 }
 
 function PreviewImage({ path }: { path: string }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [error, setError] = useState(false)
-  const [isHovering, setIsHovering] = useState(true)
+  const [isStlFallback, setIsStlFallback] = useState(false)
 
   const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
-  const previewUrl = `${apiHost}/api/preview?path=${encodeURIComponent(path)}`
-
-  // Basic extension check for UI hints
   const isVideo = /\.(mp4|webm|mov|mkv|avi)$/i.test(path)
   const is3D = /\.(stl|obj|3mf)$/i.test(path)
 
+  useEffect(() => {
+    setPreviewUrl(null)
+    setError(false)
+    setIsStlFallback(false)
+
+    if (isVideo) {
+      setPreviewUrl(`${apiHost}/api/preview?path=${encodeURIComponent(path)}`)
+      return
+    }
+
+    // For direct 3D files, request PNG render immediately
+    if (is3D) {
+      setPreviewUrl(`${apiHost}/api/preview?path=${encodeURIComponent(path)}&format=png`)
+      return
+    }
+
+    // For everything else: attempt normal preview first, then fall back to STL render
+    const primaryUrl = `${apiHost}/api/preview?path=${encodeURIComponent(path)}`
+    fetch(primaryUrl)
+      .then(res => {
+        if (res.ok) {
+          return res.blob().then(blob => {
+            setPreviewUrl(URL.createObjectURL(blob))
+          })
+        }
+        // Primary failed — try STL render fallback
+        const stlUrl = `${apiHost}/api/preview?path=${encodeURIComponent(path)}&type=model&format=png`
+        return fetch(stlUrl).then(res2 => {
+          if (res2.ok) {
+            return res2.blob().then(blob => {
+              setIsStlFallback(true)
+              setPreviewUrl(URL.createObjectURL(blob))
+            })
+          }
+          throw new Error('No preview available')
+        })
+      })
+      .catch(() => setError(true))
+  }, [path])
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (previewUrl?.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+    }
+  }, [previewUrl])
+
   return (
-    <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-white/10 bg-black/40 flex items-center justify-center">
+    <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-glass-border bg-black/40 flex items-center justify-center">
       {error ? (
         <div className="flex flex-col items-center justify-center opacity-40">
           <ImageIcon className="w-8 h-8 mb-1" />
           <span className="text-[10px] font-bold uppercase tracking-widest">Preview Error</span>
         </div>
-      ) : is3D ? (
-        <div className="flex flex-col items-center justify-center text-blue-400 opacity-60">
-          <Box className="w-10 h-10 mb-1" />
-          <span className="text-[10px] font-bold uppercase tracking-widest">3D Model</span>
+      ) : !previewUrl ? (
+        <div className="flex flex-col items-center justify-center opacity-40">
+          <Loader2 className="w-6 h-6 animate-spin mb-1" />
         </div>
       ) : isVideo ? (
         <video
@@ -229,7 +280,9 @@ function PreviewImage({ path }: { path: string }) {
       <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
       <div className="absolute bottom-2 left-3 flex items-center gap-2">
         <Zap className="w-3 h-3 text-blue-400 animate-pulse" />
-        <span className="text-[8px] font-bold text-white/80 uppercase tracking-widest">AI Preview Stream</span>
+        <span className="text-[8px] font-bold text-white/80 uppercase tracking-widest">
+          {is3D || isStlFallback ? 'A.I. 3D RENDER' : isVideo ? 'AI VIDEO STREAM' : 'AI PREVIEW STREAM'}
+        </span>
       </div>
     </div>
   )
@@ -285,7 +338,7 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
 
   return (
     <div
-      className="relative flex items-center gap-3 p-3 bg-white/5 rounded-xl group/file cursor-pointer hover:bg-white/[0.08] transition-all"
+      className="relative flex items-center gap-3 p-3 bg-glass-layer rounded-xl group/file cursor-pointer hover:bg-glass-border transition-all"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onClick={(e) => handleOpen(e, 'launch')}
@@ -295,12 +348,29 @@ function FileItem({ file, onRefresh }: { file: FileInfo, onRefresh?: () => void 
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-bold text-gray-200 truncate">{file.name}</p>
-          <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-white/5 text-gray-500 uppercase tracking-tighter">
+          <p className="text-sm font-bold text-foreground truncate">{file.name}</p>
+          <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-glass-layer text-gray-500 dark:text-gray-400 uppercase tracking-tighter">
             {formatBytes(file.size)}
           </span>
+          {file.visual_score !== undefined && (
+            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter border ${file.visual_score >= 95 ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-orange-500/10 text-orange-400 border-orange-500/20'}`}>
+              {file.visual_score.toFixed(1)}% Match
+            </span>
+          )}
         </div>
-        <p className="text-[10px] text-gray-500 font-medium truncate opacity-60 uppercase tracking-tighter">{file.path}</p>
+        <p className="text-[10px] font-medium truncate uppercase tracking-tighter font-mono">
+          {(() => {
+            const parts = file.path.split(/[\\/]/)
+            const fileName = parts[parts.length - 1]
+            const dirPath = parts.slice(0, -1).join('\\')
+            return (
+              <>
+                {dirPath && <span className="text-cyan-500/70">{dirPath}\</span>}
+                <span className="text-gray-400">{fileName}</span>
+              </>
+            )
+          })()}
+        </p>
       </div>
       <div className="flex gap-2">
         <button
@@ -389,6 +459,35 @@ export default function Dashboard() {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
   const [isEditingPage, setIsEditingPage] = useState(false)
   const [tempPage, setTempPage] = useState('')
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system')
+  const [sizeSortOrder, setSizeSortOrder] = useState<'asc' | 'desc'>('desc')
+
+  // Theme Logic
+  useEffect(() => {
+    const saved = localStorage.getItem('theme') as 'light' | 'dark' | 'system' | null
+    if (saved) setTheme(saved)
+  }, [])
+
+  useEffect(() => {
+    const root = document.documentElement
+    if (theme === 'system') {
+      root.classList.remove('light', 'dark')
+      localStorage.removeItem('theme')
+    } else {
+      root.classList.remove('light', 'dark')
+      root.classList.add(theme)
+      localStorage.setItem('theme', theme)
+    }
+  }, [theme])
+
+  const toggleTheme = () => {
+    if (theme === 'system') {
+      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      setTheme(isDark ? 'light' : 'dark')
+    } else {
+      setTheme(theme === 'dark' ? 'light' : 'dark')
+    }
+  }
 
   // Global error listener for debugging
   useEffect(() => {
@@ -458,7 +557,7 @@ export default function Dashboard() {
   const filteredSizeGroups = useMemo(() => {
     if (!data?.size_groups) return []
     const query = searchQuery.toLowerCase()
-    return data.size_groups.filter(group => {
+    const filtered = data.size_groups.filter(group => {
       return (group?.files || []).some(file => {
         const name = (file?.name || '').toLowerCase()
         const matchesSearch = name.includes(query)
@@ -466,7 +565,11 @@ export default function Dashboard() {
         return matchesSearch && matchesType
       })
     }) || []
-  }, [data?.size_groups, searchQuery, fileType])
+
+    return filtered.sort((a, b) => {
+      return sizeSortOrder === 'desc' ? b.size - a.size : a.size - b.size
+    })
+  }, [data?.size_groups, searchQuery, fileType, sizeSortOrder])
 
   const filteredSimilarGroups = useMemo(() => {
     if (!data?.similar_groups) return []
@@ -573,6 +676,54 @@ export default function Dashboard() {
   }
 
   const [savingConfig, setSavingConfig] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [cacheStats, setCacheStats] = useState<{ size_gb: number, limit_gb: number } | null>(null)
+
+  const fetchCacheStats = useCallback(async () => {
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    try {
+      const res = await fetch(`${apiHost}/api/cache-stats`)
+      const data = await res.json()
+      setCacheStats(data)
+    } catch (err) {
+      console.error("Failed to fetch cache stats:", err)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (showSettings) {
+      fetchCacheStats()
+    }
+  }, [showSettings, fetchCacheStats])
+
+  const handleClearCache = async () => {
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    if (!confirm("Are you sure you want to clear all cached previews? (They will be re-extracted on next view)")) return
+    try {
+      await fetch(`${apiHost}/api/cache-clear`, { method: 'POST' })
+      fetchCacheStats()
+    } catch (err) {
+      alert("Error clearing cache")
+    }
+  }
+
+  const handleUpdateCacheLimit = async (limit: number) => {
+    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+    // Load current config, update limit, then save
+    try {
+      const res = await fetch(`${apiHost}/api/config`)
+      const cfg = await res.json()
+      cfg.cache_limit_gb = limit
+      await fetch(`${apiHost}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg)
+      })
+      fetchCacheStats()
+    } catch (err) {
+      console.error("Failed to update cache limit:", err)
+    }
+  }
   const handleStartScan = async (config: AppConfig) => {
     setSavingConfig(true)
     const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
@@ -595,7 +746,7 @@ export default function Dashboard() {
   }
 
   if (!mounted || loading) return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground">
       <motion.div
         animate={{ rotate: 360 }}
         transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
@@ -607,7 +758,7 @@ export default function Dashboard() {
   )
 
   if (error) return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white p-6">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-6">
       <AlertTriangle className="w-16 h-16 text-red-500 mb-4" />
       <h1 className="text-2xl font-bold mb-2">Connection Error</h1>
       <p className="text-gray-400 text-center max-w-md">{error}</p>
@@ -635,15 +786,15 @@ export default function Dashboard() {
   const fileTypes = ['all', 'zip', 'rar', '7z', 'stl']
 
   return (
-    <div className="min-h-screen bg-[#0a0a0c] text-slate-200 p-8 md:p-12 flex flex-col items-center">
+    <div className="min-h-screen bg-background text-foreground p-8 md:p-12 flex flex-col items-center">
       <div className="w-full max-w-[1700px] transition-all duration-500 ease-in-out">
         {/* Header */}
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-16 gap-6">
           <div>
             <h1 className="text-5xl font-black tracking-tight flex items-center gap-4">
               <span className="bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">ARCHIVE</span>
-              <span className="text-white">FINDER</span>
-              <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-md text-xs text-blue-400 uppercase tracking-widest font-bold">Intelligence v1.8.0</div>
+              <span className="text-foreground">FINDER</span>
+              <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-md text-xs text-blue-400 uppercase tracking-widest font-bold">Intelligence v2.0.0</div>
             </h1>
             <p className="text-gray-500 mt-2 font-medium tracking-wide text-lg">3D Asset Deduplication & Management Dashboard</p>
           </div>
@@ -653,11 +804,24 @@ export default function Dashboard() {
                 onClick={async () => {
                   const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
                   await fetch(`${apiHost}/api/reset`, { method: 'POST' })
-                  window.location.reload()
                 }}
                 className="px-6 py-3 bg-red-500/10 hover:bg-red-500/20 rounded-2xl text-sm font-medium text-red-400 transition-all border border-red-500/20"
               >
-                🆕 New Scan
+                New Scan
+              </button>
+              <button
+                onClick={toggleTheme}
+                className="p-3 bg-glass-layer hover:bg-glass-border rounded-2xl text-gray-500 dark:text-gray-400 transition-all border border-glass-border"
+                title={`Theme: ${theme}`}
+              >
+                {theme === 'dark' ? <Moon className="w-5 h-5" /> : theme === 'light' ? <Sun className="w-5 h-5" /> : <div className="relative"><Sun className="w-5 h-5" /><Moon className="w-3 h-3 absolute -bottom-1 -right-1" /></div>}
+              </button>
+              <button
+                onClick={() => setShowSettings(true)}
+                className="p-3 bg-glass-layer hover:bg-glass-border rounded-2xl text-gray-500 dark:text-gray-400 transition-all border border-glass-border"
+                title="Settings"
+              >
+                <Settings className="w-5 h-5" />
               </button>
               <Link href="/gallery">
                 <button className="px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-2xl text-sm font-bold text-white transition-all border border-blue-500/20 shadow-lg shadow-blue-500/20 flex items-center gap-2">
@@ -667,11 +831,11 @@ export default function Dashboard() {
               </Link>
               <button
                 onClick={requestNotificationPermission}
-                className="px-6 py-3 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-medium text-gray-400 transition-all border border-white/10"
+                className="px-6 py-3 bg-glass-layer hover:bg-glass-border rounded-2xl text-sm font-medium text-gray-500 dark:text-gray-400 transition-all border border-glass-border"
               >
                 🔔 Enable Notifications
               </button>
-              <div className="flex items-center gap-3 px-6 py-3 bg-white/5 rounded-2xl border border-white/10">
+              <div className="flex items-center gap-3 px-6 py-3 bg-glass-layer rounded-2xl border border-glass-border">
                 <div className={`w-2.5 h-2.5 rounded-full ${data?.status === 'finished' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-yellow-500 animate-pulse'}`} />
                 <span className="text-sm font-medium text-gray-300 uppercase tracking-widest">
                   {data?.status || 'Analyzing'}
@@ -690,12 +854,22 @@ export default function Dashboard() {
               placeholder="Search by filename..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white/5 border border-white/5 rounded-3xl py-5 pl-16 pr-6 text-base font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
+              className="w-full bg-glass-layer border border-glass-border rounded-3xl py-5 pl-16 pr-6 text-base font-medium focus:outline-none focus:border-blue-500/50 focus:bg-glass-layer transition-all"
             />
           </div>
 
+          {viewMode === 'size' && (
+            <button
+              onClick={() => setSizeSortOrder(current => current === 'desc' ? 'asc' : 'desc')}
+              className="p-5 bg-glass-layer hover:bg-glass-border border border-glass-border rounded-3xl transition-all text-gray-400 hover:text-foreground flex items-center gap-2"
+              title={`Sort by Size: ${sizeSortOrder === 'desc' ? 'Descending' : 'Ascending'}`}
+            >
+              {sizeSortOrder === 'desc' ? <ArrowDown01 className="w-6 h-6" /> : <ArrowUp01 className="w-6 h-6" />}
+            </button>
+          )}
+
           <div className="flex flex-wrap gap-3 items-center w-full justify-between">
-            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5 flex-grow sm:flex-grow-0">
+            <div className="flex gap-2 bg-glass-layer p-1.5 rounded-3xl flex-grow sm:flex-grow-0">
               <button
                 onClick={() => setViewMode('size')}
                 className={`flex-1 sm:flex-none px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-wide transition-all flex items-center justify-center gap-3 whitespace-nowrap ${viewMode === 'size'
@@ -728,7 +902,7 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <div className="flex gap-2 bg-white/5 p-1.5 rounded-3xl border border-white/5 overflow-x-auto max-w-full">
+            <div className="flex gap-2 bg-glass-layer p-1.5 rounded-3xl overflow-x-auto max-w-full">
               {fileTypes.map(type => (
                 <button
                   key={type}
@@ -752,9 +926,9 @@ export default function Dashboard() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className={`glass-card p-4 rounded-[1.2rem] relative overflow-hidden group hover:scale-[1.03] transition-all cursor-pointer h-full min-h-[110px] flex flex-col justify-between border border-white/5 ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar') || (stat.label === 'Visual Matches' && viewMode === 'visual')
-                  ? 'border-blue-500/40 shadow-[0_0_20px_rgba(59,130,246,0.1)] bg-blue-500/5'
-                  : 'hover:border-white/20'
+                className={`bg-glass-layer backdrop-blur-xl p-5 rounded-3xl relative overflow-hidden group hover:scale-[1.03] transition-all cursor-pointer h-full min-h-[110px] flex flex-col justify-between ${(stat.label === 'Size Groups' && viewMode === 'size') || (stat.label === 'Similar Names' && viewMode === 'similar') || (stat.label === 'Visual Matches' && viewMode === 'visual')
+                  ? 'border border-blue-500/50 shadow-lg shadow-blue-500/10 bg-blue-500/10'
+                  : 'border border-transparent hover:border-glass-border hover:bg-glass-layer/80'
                   }`}
                 onClick={() => {
                   if (stat.label === 'Size Groups') setViewMode('size')
@@ -767,14 +941,14 @@ export default function Dashboard() {
 
                 <div className="flex flex-col gap-2">
                   <div className="flex justify-between items-center">
-                    <div className={`p-1.5 rounded-lg bg-white/5 border border-white/5 ${stat.color}`}>
+                    <div className={`p-1.5 rounded-lg bg-glass-layer ${stat.color}`}>
                       <stat.icon className="w-4 h-4" />
                     </div>
                     <div className="text-[9px] font-black text-gray-500 uppercase tracking-[0.15em]">{stat.label}</div>
                   </div>
 
                   <div className="mt-1">
-                    <div className={`text-2xl lg:text-3xl font-black text-white glow-text tracking-tighter truncate leading-none`}>
+                    <div className={`text-2xl lg:text-3xl font-black text-foreground glow-text tracking-tighter truncate leading-none`}>
                       {stat.value}
                     </div>
                   </div>
@@ -999,8 +1173,8 @@ export default function Dashboard() {
                 )}
 
                 {currentItems.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-20 bg-white/5 rounded-3xl border border-dashed border-white/10">
-                    <Box className="w-12 h-12 text-gray-700 mb-4" />
+                  <div className="flex flex-col items-center justify-center py-20 bg-glass-layer rounded-3xl border border-dashed border-glass-border">
+                    <Box className="w-12 h-12 text-gray-400 dark:text-gray-600 mb-4" />
                     <p className="text-gray-500 font-bold uppercase tracking-widest">No duplicates found</p>
                   </div>
                 )}
@@ -1012,7 +1186,7 @@ export default function Dashboard() {
                   <button
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
-                    className="p-3 bg-white/5 rounded-xl text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                    className="p-3 bg-glass-layer rounded-xl text-gray-400 hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                   >
                     <Zap className="w-4 h-4 rotate-180" />
                   </button>
@@ -1031,7 +1205,7 @@ export default function Dashboard() {
                             onClick={() => handlePageChange(page)}
                             className={`w-10 h-10 rounded-xl text-[10px] font-black transition-all ${currentPage === page
                               ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
-                              : 'bg-white/5 text-gray-500 hover:text-gray-300'
+                              : 'bg-glass-layer text-gray-500 hover:text-gray-300'
                               }`}
                           >
                             {page}
@@ -1050,7 +1224,7 @@ export default function Dashboard() {
                   <button
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
-                    className="p-3 bg-white/5 rounded-xl text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                    className="p-3 bg-glass-layer rounded-xl text-gray-400 hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                   >
                     <Zap className="w-4 h-4" />
                   </button>
@@ -1059,7 +1233,7 @@ export default function Dashboard() {
                     <select
                       value={itemsPerPage}
                       onChange={(e) => setItemsPerPage(Number(e.target.value))}
-                      className="appearance-none bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 focus:outline-none focus:border-blue-500/50 transition-all cursor-pointer pr-8 hover:bg-white/10 hover:text-gray-200"
+                      className="appearance-none bg-glass-layer border border-glass-border rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 focus:outline-none focus:border-blue-500/50 transition-all cursor-pointer pr-8 hover:bg-glass-border hover:text-gray-200"
                     >
                       <option value={10}>10</option>
                       <option value={20}>20</option>
@@ -1078,14 +1252,14 @@ export default function Dashboard() {
             <ModelPreview selectedFiles={selectedFiles} />
 
             <div className="glass-card p-6 rounded-3xl border border-blue-500/20 sticky top-8">
-              <h3 className="text-lg font-black mb-6 text-white uppercase tracking-widest flex items-center gap-3">
+              <h3 className="text-lg font-black mb-6 text-foreground uppercase tracking-widest flex items-center gap-3">
                 <Cpu className="w-5 h-5 text-blue-500" />
                 Analysis Expert
               </h3>
 
               <div className="bg-blue-500/10 p-4 rounded-2xl border border-blue-500/20 mb-8">
-                <p className="text-xs text-blue-200 leading-relaxed font-medium">
-                  I found <span className="text-white font-black">{data?.size_groups?.length} identical size groups</span>. These are highly likely to be the same content with renamed files. Deleting one version is safe.
+                <p className="text-xs text-blue-600 dark:text-blue-200 leading-relaxed font-medium">
+                  I found <span className="text-foreground font-black">{data?.size_groups?.length} identical size groups</span>. These are highly likely to be the same content with renamed files. Deleting one version is safe.
                 </p>
               </div>
 
@@ -1096,7 +1270,7 @@ export default function Dashboard() {
                 </button>
                 <button
                   onClick={handleOpenDirectory}
-                  className="w-full py-4 glass-card border-white/10 hover:border-blue-500/40 text-gray-400 hover:text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95"
+                  className="w-full py-4 glass-card border-glass-border hover:border-blue-500/40 text-gray-400 hover:text-foreground font-black text-xs uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-95"
                 >
                   <ExternalLink className="w-4 h-4" />
                   Browse Directory
@@ -1162,7 +1336,101 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </div >
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-md"
+            onClick={() => setShowSettings(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="w-full max-w-lg glass-card p-10 rounded-[2.5rem] border border-blue-500/30 shadow-2xl relative"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-12 h-12 rounded-2xl bg-blue-600/20 flex items-center justify-center border border-blue-500/30">
+                  <Settings className="w-6 h-6 text-blue-400" />
+                </div>
+                <h2 className="text-3xl font-black tracking-tight text-white">SETTINGS</h2>
+              </div>
+
+              <div className="space-y-8">
+                {/* Cache Management Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <HardDrive className="w-5 h-5 text-gray-400" />
+                      <h3 className="text-lg font-bold text-gray-200">Cache Management</h3>
+                    </div>
+                    <button
+                      onClick={handleClearCache}
+                      className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-sm font-bold rounded-xl border border-red-500/20 transition-all"
+                    >
+                      CLEAR CACHE
+                    </button>
+                  </div>
+
+                  <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                    <div className="flex justify-between mb-2">
+                      <span className="text-sm text-gray-400">Current Cache Size</span>
+                      <span className="text-sm font-bold text-white">{cacheStats?.size_gb.toFixed(2)} GB</span>
+                    </div>
+                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500 transition-all"
+                        style={{ width: `${Math.min(100, (cacheStats?.size_gb || 0) / (cacheStats?.limit_gb || 1) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">
+                        Auto-Clear Threshold {cacheStats?.limit_gb && cacheStats.limit_gb > 0 ? `(${cacheStats.limit_gb} GB)` : '(Disabled)'}
+                      </label>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="50"
+                      step="1"
+                      value={cacheStats?.limit_gb || 0}
+                      onChange={(e) => handleUpdateCacheLimit(parseFloat(e.target.value))}
+                      className="w-full accent-blue-500 h-2 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[10px] text-gray-500 font-bold uppercase tracking-tighter">
+                      <span>Off</span>
+                      <span>10GB</span>
+                      <span>20GB</span>
+                      <span>30GB</span>
+                      <span>40GB</span>
+                      <span>50GB</span>
+                    </div>
+                    <p className="text-xs text-gray-500 italic mt-2">
+                      Automatically clears cached previews and icons when the limit is reached.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowSettings(false)}
+                className="mt-10 w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-2xl text-sm font-black text-white transition-all shadow-lg shadow-blue-500/20 uppercase tracking-widest"
+              >
+                Close Settings
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div >
   )
 }

@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 )
 
 // CalculateHash returns a unique hash for the group based on member file paths
 func CalculateGroupHash(files []FileInfo) string {
 	paths := make([]string, len(files))
 	for i, f := range files {
-		paths[i] = f.Path
+		// Normalize to lowercase for hashing to avoid case-sensitivity issues on Windows
+		paths[i] = strings.ToLower(f.Path)
 	}
 	sort.Strings(paths)
 
@@ -59,12 +61,13 @@ type SimilarityGroup struct {
 
 // FileInfo represents basic file information
 type FileInfo struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Size    int64  `json:"size"`
-	Type    string `json:"type"`
-	ModTime string `json:"mod_time"`
-	PHash   uint64 `json:"p_hash,omitempty"`
+	Name        string  `json:"name"`
+	Path        string  `json:"path"`
+	Size        int64   `json:"size"`
+	Type        string  `json:"type"`
+	ModTime     string  `json:"mod_time"`
+	PHash       uint64  `json:"p_hash,omitempty"`
+	VisualScore float64 `json:"visual_score,omitempty"`
 }
 
 // ExportJSON exports the report to a JSON file

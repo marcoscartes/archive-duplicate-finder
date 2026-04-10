@@ -1,14 +1,14 @@
 package db
 
 import (
+	"archive-duplicate-finder/internal/config"
 	"archive-duplicate-finder/internal/reporter"
 	"archive-duplicate-finder/internal/scanner"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"log"
 	"sort"
 
 	_ "modernc.org/sqlite"
@@ -19,11 +19,8 @@ type Cache struct {
 }
 
 func NewCache() (*Cache, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		configDir = "."
-	}
-	dbPath := filepath.Join(configDir, "archive-finder-cache.db")
+	dbPath := config.GetDatabasePath()
+	log.Printf("🗄️  Database: Loading from %s", dbPath)
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -53,6 +50,13 @@ func NewCache() (*Cache, error) {
 		)`,
 		`CREATE TABLE IF NOT EXISTS ignored_groups (
 			hash TEXT PRIMARY KEY
+		)`,
+		`CREATE TABLE IF NOT EXISTS thumbnail_cache (
+			cache_key TEXT PRIMARY KEY,
+			image_data BLOB,
+			content_type TEXT,
+			size INTEGER,
+			last_accessed TEXT
 		)`,
 	}
 
@@ -141,4 +145,55 @@ func (c *Cache) IsGroupIgnored(hash string) bool {
 	var exists int
 	err := c.db.QueryRow("SELECT 1 FROM ignored_groups WHERE hash = ?", hash).Scan(&exists)
 	return err == nil
+}
+
+func (c *Cache) GetThumbnail(cacheKey string) ([]byte, string, bool) {
+	var data []byte
+	var contentType string
+	err := c.db.QueryRow("SELECT image_data, content_type FROM thumbnail_cache WHERE cache_key = ?", cacheKey).Scan(&data, &contentType)
+	if err != nil {
+		return nil, "", false
+	}
+	// Update last accessed
+	_, _ = c.db.Exec("UPDATE thumbnail_cache SET last_accessed = CURRENT_TIMESTAMP WHERE cache_key = ?", cacheKey)
+	return data, contentType, true
+}
+
+func (c *Cache) PutThumbnail(cacheKey string, data []byte, contentType string) {
+	size := len(data)
+	_, _ = c.db.Exec("INSERT OR REPLACE INTO thumbnail_cache (cache_key, image_data, content_type, size, last_accessed) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)", cacheKey, data, contentType, size)
+}
+
+func (c *Cache) CleanThumbnailsIfNeeded(limitBytes int64) error {
+	if limitBytes <= 0 {
+		return nil
+	}
+	var totalSize int64
+	err := c.db.QueryRow("SELECT COALESCE(SUM(size), 0) FROM thumbnail_cache").Scan(&totalSize)
+	if err != nil {
+		return err
+	}
+
+	if totalSize <= limitBytes {
+		return nil
+	}
+
+	log.Printf("🧹 DB Thumbnail cache limit exceeded (Current: %d, Limit: %d). Cleaning up...", totalSize, limitBytes)
+	_, err = c.db.Exec(`DELETE FROM thumbnail_cache WHERE cache_key IN (
+		SELECT cache_key FROM thumbnail_cache ORDER BY last_accessed ASC LIMIT (SELECT COUNT(*)/2 FROM thumbnail_cache)
+	)`)
+	if err != nil {
+		return err
+	}
+
+	_, _ = c.db.Exec("VACUUM")
+	return nil
+}
+
+func (c *Cache) ClearAllThumbnails() error {
+	_, err := c.db.Exec("DELETE FROM thumbnail_cache")
+	if err == nil {
+		_, _ = c.db.Exec("VACUUM")
+	}
+	return err
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -37,7 +38,13 @@ func ExtractArchive(archivePath string) (map[string][]byte, error) {
 }
 
 // ListPreviewsInArchive returns a list of all files that can be used as previews
+// Now supports 1-level of recursive archive inspection
 func ListPreviewsInArchive(archivePath string) ([]PreviewInfo, error) {
+	previews, err := listPreviewsInArchiveInternal(archivePath, 1) // 1 level of recursion
+	return previews, err
+}
+
+func listPreviewsInArchiveInternal(archivePath string, depth int) ([]PreviewInfo, error) {
 	ext := strings.ToLower(filepath.Ext(archivePath))
 	var files []PreviewInfo
 	var err error
@@ -58,11 +65,44 @@ func ListPreviewsInArchive(archivePath string) ([]PreviewInfo, error) {
 	}
 
 	var previews []PreviewInfo
+	var nestedArchives []string
+
 	for _, f := range files {
 		if isImageFile(f.Path) || isModelFile(f.Path) || isVideoFile(f.Path) {
 			previews = append(previews, f)
+		} else if depth > 0 && isArchiveFile(f.Path) {
+			nestedArchives = append(nestedArchives, f.Path)
 		}
 	}
+
+	// Recursive step: peek into nested archives
+	for _, nested := range nestedArchives {
+		data, err := GetFileFromArchive(archivePath, nested)
+		if err != nil {
+			continue
+		}
+
+		// Write to temp file to read it as an archive
+		tmpFile, err := os.CreateTemp("", "nest-list-*"+filepath.Ext(nested))
+		if err != nil {
+			continue
+		}
+		tmpFile.Write(data)
+		tmpPath := tmpFile.Name()
+		tmpFile.Close()
+		defer os.Remove(tmpPath)
+
+		nestedPreviews, err := listPreviewsInArchiveInternal(tmpPath, depth-1)
+		if err == nil {
+			for _, np := range nestedPreviews {
+				previews = append(previews, PreviewInfo{
+					Path: nested + "::" + np.Path,
+					Size: np.Size,
+				})
+			}
+		}
+	}
+
 	return previews, nil
 }
 
@@ -421,6 +461,15 @@ func isVideoFile(filename string) bool {
 	}
 	ext := filepath.Ext(lower)
 	return ext == ".mp4" || ext == ".webm" || ext == ".mkv" || ext == ".mov" || ext == ".avi"
+}
+
+func isArchiveFile(filename string) bool {
+	lower := strings.ToLower(filename)
+	if strings.Contains(lower, "__macosx") || strings.Contains(lower, "@eadir") {
+		return false
+	}
+	ext := filepath.Ext(lower)
+	return ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || ext == ".gz"
 }
 
 // FindLargestVideoInArchive returns the contents of the largest video file in the archive
@@ -883,8 +932,40 @@ func CompareArchiveContents(archive1, archive2 string) (common, unique1, unique2
 	return common, unique1, unique2, nil
 }
 
-// GetFileFromArchive extracts a specific file from an archive efficiently
+// GetFileFromArchive extracts a specific file from an archive efficiently.
+// Supports nested paths using '::' separator (e.g. "archive.zip::nested.rar::image.jpg")
 func GetFileFromArchive(archivePath, filename string) ([]byte, error) {
+	// Recursive extraction for nested archives
+	if strings.Contains(filename, "::") {
+		parts := strings.Split(filename, "::")
+
+		// Extract first level
+		currentData, err := GetFileFromArchive(archivePath, parts[0])
+		if err != nil {
+			return nil, err
+		}
+
+		// Progressively extract deeper
+		for i := 1; i < len(parts); i++ {
+			// Write current level to temp file
+			tmpFile, err := os.CreateTemp("", "nest-ext-*"+filepath.Ext(parts[i-1]))
+			if err != nil {
+				return nil, err
+			}
+			tmpFile.Write(currentData)
+			tmpPath := tmpFile.Name()
+			tmpFile.Close()
+			defer os.Remove(tmpPath)
+
+			// Extract next level from this temp file
+			currentData, err = GetFileFromArchive(tmpPath, parts[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+		return currentData, nil
+	}
+
 	ext := strings.ToLower(filepath.Ext(archivePath))
 
 	switch ext {

@@ -94,7 +94,7 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
         if (!isVisible) return
 
         const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
-        const url = `${apiHost}/api/preview?path=${encodeURIComponent(file.path)}`
+        const url = `${apiHost}/api/preview?path=${encodeURIComponent(file.path)}&format=png`
 
         if (file.type === 'video') {
             setPreviewData({ url, type: 'video' })
@@ -173,7 +173,7 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
     return (
         <div
             ref={itemRef}
-            className="relative group bg-white/5 rounded-2xl overflow-hidden border border-white/10 hover:border-blue-500/30 transition-all w-full h-full cursor-pointer"
+            className="relative group bg-glass-layer rounded-2xl overflow-hidden border border-glass-border hover:border-blue-500/30 transition-all w-full h-full cursor-pointer"
             onClick={handleImageClick}
         >
             {loading && (
@@ -228,7 +228,7 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
 
             {/* File info footer - Always visible */}
             <div
-                className="absolute bottom-0 left-0 right-0 p-3 bg-black/60 backdrop-blur-sm border-t border-white/5 pointer-events-auto hover:bg-black/80 transition-colors"
+                className="absolute bottom-0 left-0 right-0 p-3 bg-black/60 backdrop-blur-sm border-t border-white/10 pointer-events-auto hover:bg-black/80 transition-colors"
                 onClick={(e) => { e.stopPropagation(); handleOpen(e, 'launch'); }}
                 title="Click to open file"
             >
@@ -672,7 +672,7 @@ export default function GalleryPage() {
     }, [selectedIndex, filteredFiles.length])
 
     if (loading) return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white">
+        <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground">
             <motion.div
                 animate={{ rotate: 360 }}
                 transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
@@ -684,7 +684,7 @@ export default function GalleryPage() {
     )
 
     if (error) return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-[#0a0a0c] text-white p-6">
+        <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-6">
             <AlertTriangle className="w-16 h-16 text-red-500 mb-4" />
             <h1 className="text-2xl font-bold mb-2">Connection Error</h1>
             <p className="text-gray-400 text-center max-w-md">{error}</p>
@@ -698,19 +698,19 @@ export default function GalleryPage() {
     )
 
     return (
-        <div className="min-h-screen bg-[#0a0a0c] text-slate-200 p-4 md:p-8">
+        <div className="min-h-screen bg-background text-foreground p-4 md:p-8">
             <div className="max-w-[1000px] mx-auto">
                 <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
                     <div className="flex items-center gap-4">
                         <Link href="/">
-                            <button className="p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10">
+                            <button className="p-3 bg-glass-layer hover:bg-glass-border rounded-xl transition-all border border-glass-border">
                                 <ArrowLeft className="w-5 h-5" />
                             </button>
                         </Link>
                         <div>
                             <h1 className="text-4xl font-black tracking-tight flex items-center gap-3">
                                 <span className="bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">GALLERY</span>
-                                <span className="text-white">VIEW</span>
+                                <span className="text-foreground">VIEW</span>
                             </h1>
                             <p className="text-gray-500 mt-1 font-medium tracking-wide">Browse all archive previews</p>
                         </div>
@@ -725,16 +725,16 @@ export default function GalleryPage() {
                             placeholder="Search files by name..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full bg-white/5 border border-white/5 rounded-2xl py-4 pl-12 pr-4 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition-all"
+                            className="w-full bg-glass-layer border border-glass-border rounded-2xl py-4 pl-12 pr-4 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-glass-layer transition-all"
                         />
                     </div>
 
-                    <div className="flex items-center gap-2 bg-white/5 rounded-2xl p-1.5 border border-white/10 self-stretch md:self-auto overflow-x-auto">
+                    <div className="flex items-center gap-2 bg-glass-layer rounded-2xl p-1.5 border border-glass-border self-stretch md:self-auto overflow-x-auto">
                         {['all', 'zip', 'rar', '7z', 'stl', 'obj'].map(ext => (
                             <button
                                 key={ext}
                                 onClick={() => setFilterExt(ext as any)}
-                                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${filterExt === ext ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-500 hover:text-white'}`}
+                                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${filterExt === ext ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-500 hover:text-foreground'}`}
                             >
                                 {ext}
                             </button>
@@ -762,7 +762,7 @@ export default function GalleryPage() {
                                             setSortOrder('asc')
                                         }
                                     }}
-                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all border ${sortField === item.id ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'bg-transparent border-white/5 text-gray-500 hover:bg-white/5'}`}
+                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all border ${sortField === item.id ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'bg-transparent border-glass-border text-gray-500 hover:bg-glass-layer'}`}
                                 >
                                     <item.icon className="w-3 h-3" />
                                     <span className="text-[10px] font-bold uppercase tracking-tighter">{item.label}</span>
@@ -772,7 +772,7 @@ export default function GalleryPage() {
                     </div>
 
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                        Showing <span className="text-white">{filteredFiles.length}</span> / {files.length} archives
+                        Showing <span className="text-foreground">{filteredFiles.length}</span> / {files.length} archives
                     </div>
                 </div>
 
@@ -797,7 +797,7 @@ export default function GalleryPage() {
                     <div className="mt-12 mb-20 flex justify-center">
                         <button
                             onClick={() => setPage(p => p + 1)}
-                            className="px-8 py-4 bg-white/5 hover:bg-blue-600 border border-white/10 rounded-2xl text-sm font-black uppercase tracking-widest transition-all shadow-xl hover:shadow-blue-600/20 group flex items-center gap-3"
+                            className="px-8 py-4 bg-glass-layer hover:bg-blue-600 border border-glass-border rounded-2xl text-sm font-black uppercase tracking-widest transition-all shadow-xl hover:shadow-blue-600/20 group flex items-center gap-3"
                         >
                             <span>Load More Archives</span>
                             <span className="text-[10px] text-gray-500 group-hover:text-blue-200">

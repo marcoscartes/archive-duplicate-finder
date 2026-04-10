@@ -1,11 +1,36 @@
 @import "tailwindcss";
 
 :root {
+  /* Light Mode Defaults */
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: rgba(255, 255, 255, 0.8);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  /* Replaces border-white/10 */
+  --glass-layer: rgba(0, 0, 0, 0.04);
+  /* Replaces bg-white/5 */
+  --accent: #3b82f6;
+  --accent-glow: rgba(59, 130, 246, 0.4);
+}
+
+/* Dark Mode Trigger (System or Manual Class) */
+:root:has(.dark),
+.dark {
   --background: #0a0a0c;
   --foreground: #f8fafc;
   --card: rgba(30, 30, 35, 0.7);
-  --accent: #3b82f6;
-  --accent-glow: rgba(59, 130, 246, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-layer: rgba(255, 255, 255, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: #0a0a0c;
+    --foreground: #f8fafc;
+    --card: rgba(30, 30, 35, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-layer: rgba(255, 255, 255, 0.05);
+  }
 }
 
 body {
@@ -20,8 +45,18 @@ body {
 .glass-card {
   background: var(--card);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+}
+
+.dark .glass-card {
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .glass-card {
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  }
 }
 
 .accent-border {

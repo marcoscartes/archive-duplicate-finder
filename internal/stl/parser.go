@@ -31,8 +31,8 @@ func CompareSTL(data1, data2 []byte) (identical bool, diff *STLDiff) {
 	}
 
 	// Parse both STL files
-	info1, err1 := parseSTL(data1)
-	info2, err2 := parseSTL(data2)
+	info1, err1 := ParseSTL(data1)
+	info2, err2 := ParseSTL(data2)
 
 	if err1 != nil || err2 != nil {
 		// If we can't parse, just compare bytes
@@ -72,12 +72,22 @@ func CompareSTL(data1, data2 []byte) (identical bool, diff *STLDiff) {
 	return false, diff
 }
 
+type Vec3 struct {
+	X, Y, Z float32
+}
+
+type Triangle struct {
+	V1, V2, V3 Vec3
+	Normal     Vec3
+}
+
 // STLInfo contains information about an STL file
 type STLInfo struct {
 	TriangleCount int
 	VertexCount   int
 	Bounds        Bounds
 	IsBinary      bool
+	Triangles     []Triangle
 }
 
 // Bounds represents the bounding box of an STL model
@@ -87,8 +97,8 @@ type Bounds struct {
 	MinZ, MaxZ float32
 }
 
-// parseSTL parses an STL file and extracts information
-func parseSTL(data []byte) (*STLInfo, error) {
+// ParseSTL parses an STL file and extracts information
+func ParseSTL(data []byte) (*STLInfo, error) {
 	// Determine if binary or ASCII
 	if isBinarySTL(data) {
 		return parseBinarySTL(data)
@@ -142,15 +152,27 @@ func parseBinarySTL(data []byte) (*STLInfo, error) {
 
 	// Parse triangles to get bounds
 	offset := 84
+	info.Triangles = make([]Triangle, 0, triangleCount)
 	for i := 0; i < int(triangleCount); i++ {
-		// Skip normal vector (12 bytes)
+		// Read normal vector (12 bytes)
+		nx := math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
+		ny := math.Float32frombits(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		nz := math.Float32frombits(binary.LittleEndian.Uint32(data[offset+8 : offset+12]))
 		offset += 12
 
+		var tri Triangle
+		tri.Normal = Vec3{nx, ny, nz}
+
 		// Read 3 vertices (9 floats = 36 bytes)
+		vertices := [3]*Vec3{&tri.V1, &tri.V2, &tri.V3}
 		for v := 0; v < 3; v++ {
 			x := math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
 			y := math.Float32frombits(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
 			z := math.Float32frombits(binary.LittleEndian.Uint32(data[offset+8 : offset+12]))
+
+			vertices[v].X = x
+			vertices[v].Y = y
+			vertices[v].Z = z
 
 			info.Bounds.MinX = min(info.Bounds.MinX, x)
 			info.Bounds.MaxX = max(info.Bounds.MaxX, x)
@@ -161,6 +183,7 @@ func parseBinarySTL(data []byte) (*STLInfo, error) {
 
 			offset += 12
 		}
+		info.Triangles = append(info.Triangles, tri)
 
 		// Skip attribute byte count (2 bytes)
 		offset += 2
@@ -188,18 +211,36 @@ func parseASCIISTL(data []byte) (*STLInfo, error) {
 	triangleCount := 0
 	vertexCount := 0
 
+	var currentTriangle Triangle
+	vCount := 0
 	for _, line := range lines {
 		trimmed := bytes.TrimSpace(line)
 
-		if bytes.HasPrefix(trimmed, []byte("facet")) {
+		if bytes.HasPrefix(trimmed, []byte("facet normal")) {
 			triangleCount++
+			var nx, ny, nz float32
+			_, err := fmt.Sscanf(string(trimmed), "facet normal %f %f %f", &nx, &ny, &nz)
+			if err == nil {
+				currentTriangle.Normal = Vec3{nx, ny, nz}
+			}
 		} else if bytes.HasPrefix(trimmed, []byte("vertex")) {
 			vertexCount++
+			vCount++
 
 			// Parse vertex coordinates
 			var x, y, z float32
 			_, err := fmt.Sscanf(string(trimmed), "vertex %f %f %f", &x, &y, &z)
 			if err == nil {
+				v := Vec3{x, y, z}
+				switch vCount {
+				case 1:
+					currentTriangle.V1 = v
+				case 2:
+					currentTriangle.V2 = v
+				case 3:
+					currentTriangle.V3 = v
+				}
+
 				info.Bounds.MinX = min(info.Bounds.MinX, x)
 				info.Bounds.MaxX = max(info.Bounds.MaxX, x)
 				info.Bounds.MinY = min(info.Bounds.MinY, y)
@@ -207,6 +248,9 @@ func parseASCIISTL(data []byte) (*STLInfo, error) {
 				info.Bounds.MinZ = min(info.Bounds.MinZ, z)
 				info.Bounds.MaxZ = max(info.Bounds.MaxZ, z)
 			}
+		} else if bytes.HasPrefix(trimmed, []byte("endfacet")) {
+			info.Triangles = append(info.Triangles, currentTriangle)
+			vCount = 0
 		}
 	}
 

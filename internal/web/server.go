@@ -7,8 +7,13 @@ import (
 	"archive-duplicate-finder/internal/reporter"
 	"archive-duplicate-finder/internal/scanner"
 	"archive-duplicate-finder/internal/similarity"
+	"archive-duplicate-finder/internal/stl"
 	"archive-duplicate-finder/internal/visual"
+	"bytes"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"log"
 	"os"
 	"os/exec"
@@ -21,23 +26,27 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/nfnt/resize"
 )
 
 // Server represents the web dashboard server
 type Server struct {
-	addr          string
-	report        *reporter.Report
-	trashPath     string
-	leaveRef      bool
-	debug         bool
-	runStep3Func  func()
-	runVisualFunc func()
-	allFiles      []reporter.FileInfo
-	cache         *db.Cache
-	previewSem    chan struct{}
-	scanDir       string
-	config        *config.AppConfig
-	mu            sync.Mutex
+	addr               string
+	report             *reporter.Report
+	trashPath          string
+	leaveRef           bool
+	debug              bool
+	runStep3Func       func()
+	runVisualFunc      func()
+	allFiles           []reporter.FileInfo
+	cache              *db.Cache
+	previewSem         chan struct{}
+	scanDir            string
+	config             *config.AppConfig
+	mu                 sync.Mutex
+	// activePreviewFiles tracks files currently being extracted for preview.
+	// Key: file path (string), Value: *sync.WaitGroup
+	activePreviewFiles sync.Map
 }
 
 // NewServer creates a new web dashboard server
@@ -135,6 +144,26 @@ func (s *Server) Start() error {
 
 	api.Get("/config", func(c *fiber.Ctx) error {
 		return c.JSON(s.config)
+	})
+
+	api.Get("/cache-stats", func(c *fiber.Ctx) error {
+		size, _ := config.GetCacheSize()
+		return c.JSON(fiber.Map{
+			"size_bytes": size,
+			"size_gb":    float64(size) / (1024 * 1024 * 1024),
+			"limit_gb":   s.config.CacheLimitGB,
+		})
+	})
+
+	api.Post("/cache-clear", func(c *fiber.Ctx) error {
+		err := config.ClearCache()
+		if s.cache != nil {
+			_ = s.cache.ClearAllThumbnails()
+		}
+		if err != nil {
+			return c.Status(500).SendString(err.Error())
+		}
+		return c.SendStatus(200)
 	})
 
 	api.Post("/config", func(c *fiber.Ctx) error {
@@ -386,10 +415,6 @@ func (s *Server) Start() error {
 		// 2. Files inside archives (or found video preview from above)
 		fileExt := strings.ToLower(filepath.Ext(internalPath))
 
-		// For images, models or videos inside archives, use disk cache
-		tempDir := filepath.Join(os.TempDir(), "archive-finder-cache")
-		os.MkdirAll(tempDir, 0755)
-
 		// Create a unique hash/filename for this specific file in the archive
 		cacheKey := fmt.Sprintf("%x_%s", path, internalPath)
 		cacheKey = strings.Map(func(r rune) rune {
@@ -399,23 +424,86 @@ func (s *Server) Start() error {
 			return '_'
 		}, cacheKey)
 
-		cachePath := filepath.Join(tempDir, cacheKey+fileExt)
+		// Determine actual cache path (STL rendering produces PNGs)
+		isSTRRender := strings.ToLower(filepath.Ext(internalPath)) == ".stl" && c.Query("format") == "png"
+		if isSTRRender {
+			fileExt = ".png"
+		}
 
-		// If not cached, extract it (limited concurrency)
-		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
-			s.previewSem <- struct{}{}
-			data, err := archive.GetFileFromArchive(path, internalPath)
-			if err != nil {
-				<-s.previewSem
-				return c.Status(404).SendString(err.Error())
+		// 1. Try to get thumbnail from DB cache
+		if s.cache != nil {
+			if cachedData, cType, ok := s.cache.GetThumbnail(cacheKey); ok {
+				c.Set("X-Internal-Path", internalPath)
+				c.Set("Content-Type", cType)
+				return c.Send(cachedData)
 			}
-			os.WriteFile(cachePath, data, 0644)
+		}
+
+		// 2. Fallback to extracting it (limited concurrency)
+		// Register this file as being actively extracted so that a concurrent
+		// delete request can wait for us to finish before touching the file.
+		wg := &sync.WaitGroup{}
+		wg.Add(1)
+		// Store the WaitGroup, or merge with an existing one if present.
+		actual, loaded := s.activePreviewFiles.LoadOrStore(path, wg)
+		if loaded {
+			// Another goroutine already registered a WaitGroup; add to it.
+			existingWg := actual.(*sync.WaitGroup)
+			existingWg.Add(1)
+			wg = existingWg
+		}
+
+		s.previewSem <- struct{}{}
+		data, err := archive.GetFileFromArchive(path, internalPath)
+		if err != nil {
 			<-s.previewSem
+			wg.Done()
+			s.activePreviewFiles.Delete(path)
+			return c.Status(404).SendString(err.Error())
+		}
+
+		// SPECIAL CASE: If it's an STL and we want a PNG preview
+		if isSTRRender {
+			info, err := stl.ParseSTL(data)
+			if err == nil {
+				pngData, err := stl.RenderToPNG(info, 800, 600)
+				if err == nil {
+					data = pngData
+				}
+			}
+		}
+		<-s.previewSem
+		wg.Done()
+		s.activePreviewFiles.Delete(path)
+
+		contentType := getContentType(cacheKey + fileExt)
+		
+		// If it's an image, resize it to max 256x256
+		if strings.HasPrefix(contentType, "image/") {
+			img, _, err := image.Decode(bytes.NewReader(data))
+			if err == nil {
+				bounds := img.Bounds()
+				if bounds.Dx() > 256 || bounds.Dy() > 256 {
+					img = resize.Thumbnail(256, 256, img, resize.Bilinear)
+					buf := new(bytes.Buffer)
+					// Encode to JPEG to save space
+					if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 80}); err == nil {
+						data = buf.Bytes()
+						contentType = "image/jpeg"
+					}
+				}
+			}
+		}
+
+		if s.cache != nil {
+			s.cache.PutThumbnail(cacheKey, data, contentType)
+			// Enforce limit
+			go s.checkCacheLimit()
 		}
 
 		c.Set("X-Internal-Path", internalPath)
-		c.Set("Content-Type", getContentType(internalPath))
-		return c.SendFile(cachePath)
+		c.Set("Content-Type", contentType)
+		return c.Send(data)
 	})
 
 	api.Get("/list-previews", func(c *fiber.Ctx) error {
@@ -479,6 +567,14 @@ func (s *Server) Start() error {
 		var req deleteRequest
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).SendString("Invalid request body")
+		}
+
+		// Wait for any in-progress preview extraction of this file to finish.
+		// This prevents "file in use" errors on Windows when the archive reader
+		// still has the file open while we try to rename/delete it.
+		if v, ok := s.activePreviewFiles.Load(req.Path); ok {
+			log.Printf("⏳ Waiting for active preview extraction of %s to finish before deleting...", req.Path)
+			v.(*sync.WaitGroup).Wait()
 		}
 
 		s.mu.Lock()
@@ -554,17 +650,24 @@ func (s *Server) Start() error {
 		return c.SendStatus(200)
 	})
 
-	// Serve static dashboard files
-	app.Static("/", "./ui/out")
+	// Serve static dashboard files with index support
+	app.Static("/", "./ui/out", fiber.Static{
+		Index: "index.html",
+	})
 
-	// Final fallback for SPA routing: any non-API route that 404s should serve index.html
-	// This allows browser reloads on routes like /gallery to work correctly.
+	// Final fallback for SPA routing: any non-API route that 404s should try to serve [path].html or index.html
 	app.Use(func(c *fiber.Ctx) error {
-		// If it's an API route, return 404
 		if strings.HasPrefix(c.Path(), "/api") {
-			return c.Next()
+			return c.Status(404).SendString("API route not found")
 		}
-		// Otherwise serve index.html from static out
+
+		// Try to see if [path].html exists (e.g., /gallery -> gallery.html)
+		htmlPath := filepath.Join("./ui/out", c.Path()+".html")
+		if _, err := os.Stat(htmlPath); err == nil {
+			return c.SendFile(htmlPath)
+		}
+
+		// Fallback to index.html for SPA client-side routing
 		return c.SendFile("./ui/out/index.html")
 	})
 
@@ -743,9 +846,10 @@ func (s *Server) RunVisual() {
 					Name:    f.Name,
 					Path:    f.Path,
 					Size:    f.Size,
-					Type:    f.Type,
-					ModTime: f.ModTime,
-					PHash:   f.PHash,
+					Type:        f.Type,
+					ModTime:     f.ModTime,
+					PHash:       f.PHash,
+					VisualScore: f.VisualScore,
 				})
 			}
 			reporterVisualGroups = append(reporterVisualGroups, reporter.SimilarityGroup{
@@ -774,6 +878,32 @@ loop:
 	s.report.Status = "finished"
 	s.mu.Unlock()
 	log.Printf("✅ Visual analysis finished.")
+}
+
+func (s *Server) checkCacheLimit() {
+	if s.config == nil || s.config.CacheLimitGB <= 0 {
+		return
+	}
+
+	limitBytes := int64(s.config.CacheLimitGB * 1024 * 1024 * 1024)
+
+	// Clear db cache
+	if s.cache != nil {
+		_ = s.cache.CleanThumbnailsIfNeeded(limitBytes)
+	}
+
+	size, err := config.GetCacheSize()
+	if err != nil {
+		return
+	}
+
+	if size > limitBytes {
+		log.Printf("🧹 Cache limit exceeded (%.2f GB > %.2f GB). Clearing cache...", float64(size)/(1024*1024*1024), s.config.CacheLimitGB)
+		config.ClearCache()
+		if s.cache != nil {
+			_ = s.cache.ClearAllThumbnails()
+		}
+	}
 }
 
 func getContentType(filename string) string {

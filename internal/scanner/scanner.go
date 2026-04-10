@@ -78,17 +78,81 @@ func (f ArchiveFile) IsMultiVolumePart() (bool, string, string) {
 	return false, "", ""
 }
 
+// isSystemFolder checks if a path should be excluded from scanning
+// Returns true for system folders like Recycle Bin, Trash, etc.
+func isSystemFolder(path string) bool {
+	lowerPath := strings.ToLower(path)
+
+	// Windows system folders
+	windowsFolders := []string{
+		"$recycle.bin",
+		"system volume information",
+		"$windows.~bt",
+		"$windows.~ws",
+		"windows.old",
+		"programdata",
+		"recovery",
+		"boot",
+		"efi",
+		"_trash",
+	}
+
+	// macOS system folders
+	macFolders := []string{
+		".trash",
+		".trashes",
+		".spotlight-v100",
+		".fseventsd",
+		".documentrevisions-v100",
+		".temporaryitems",
+		"library/caches",
+		"library/logs",
+	}
+
+	// Linux system folders
+	linuxFolders := []string{
+		".trash-", // Matches .trash-1000, etc.
+		".local/share/trash",
+		"/proc",
+		"/sys",
+		"/dev",
+		"/run",
+		"/tmp",
+		"/var/tmp",
+	}
+
+	allFolders := append(windowsFolders, macFolders...)
+	allFolders = append(allFolders, linuxFolders...)
+
+	for _, folder := range allFolders {
+		if strings.Contains(lowerPath, folder) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ScanDirectory scans a directory for archive files
 func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 	var files []ArchiveFile
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// Skip permission errors and continue
+			if os.IsPermission(err) {
+				return nil
+			}
 			return err
 		}
 
 		// Skip directories
 		if info.IsDir() {
+			// Skip system folders
+			if isSystemFolder(path) {
+				return filepath.SkipDir
+			}
+
 			// If not recursive and not the root directory, skip
 			if !recursive && path != dir {
 				return filepath.SkipDir
@@ -129,15 +193,28 @@ func getArchiveType(filename string) string {
 	}
 }
 
-// GroupBySize groups files by their size
+// GroupBySize groups files by their size, filtering out multi-volume archive parts.
+// Multi-volume parts are excluded from size-based grouping because they naturally
+// share identical sizes (e.g., exactly 1GB or 1.5GB chunks), creating noise.
 func GroupBySize(files []ArchiveFile) map[int64][]ArchiveFile {
-	groups := make(map[int64][]ArchiveFile)
-
+	rawGroups := make(map[int64][]ArchiveFile)
 	for _, file := range files {
-		groups[file.Size] = append(groups[file.Size], file)
+		// Skip multi-volume parts in size-based analysis
+		isPart, _, _ := file.IsMultiVolumePart()
+		if isPart {
+			continue
+		}
+		rawGroups[file.Size] = append(rawGroups[file.Size], file)
 	}
 
-	return groups
+	finalGroups := make(map[int64][]ArchiveFile)
+	for size, group := range rawGroups {
+		if len(group) >= 2 {
+			finalGroups[size] = group
+		}
+	}
+
+	return finalGroups
 }
 
 // PrintFileStats prints statistics about scanned files

@@ -123,7 +123,11 @@ func FindVisualDuplicates(files []scanner.ArchiveFile, cache *db.Cache, threshol
 			continue
 		}
 
-		currentGroup := []scanner.ArchiveFile{hashes[i].file}
+		type groupMember struct {
+			file  scanner.ArchiveFile
+			score float64
+		}
+		currentGroup := []groupMember{{file: hashes[i].file, score: 100.0}}
 		visited[hashes[i].file.Path] = true
 
 		for j := i + 1; j < len(hashes); j++ {
@@ -133,7 +137,8 @@ func FindVisualDuplicates(files []scanner.ArchiveFile, cache *db.Cache, threshol
 
 			dist := archive.CalculateHammingDistance(hashes[i].hash, hashes[j].hash)
 			if dist <= hammingThreshold {
-				currentGroup = append(currentGroup, hashes[j].file)
+				score := 100.0 * (1.0 - float64(dist)/64.0)
+				currentGroup = append(currentGroup, groupMember{file: hashes[j].file, score: score})
 				visited[hashes[j].file.Path] = true
 			}
 		}
@@ -141,21 +146,22 @@ func FindVisualDuplicates(files []scanner.ArchiveFile, cache *db.Cache, threshol
 		if len(currentGroup) > 1 {
 			// Convert to reporting format
 			var fileInfos []FileInfo
-			for _, f := range currentGroup {
-				modTime := f.ModTime.Format(time.RFC3339)
-				h, _ := cache.GetVisualHash(f.Path, modTime)
+			for _, m := range currentGroup {
+				modTime := m.file.ModTime.Format(time.RFC3339)
+				h, _ := cache.GetVisualHash(m.file.Path, modTime)
 				fileInfos = append(fileInfos, FileInfo{
-					Name:    f.Name,
-					Path:    f.Path,
-					Size:    f.Size,
-					Type:    f.Type,
-					ModTime: modTime,
-					PHash:   h,
+					Name:        m.file.Name,
+					Path:        m.file.Path,
+					Size:        m.file.Size,
+					Type:        m.file.Type,
+					ModTime:     modTime,
+					PHash:       h,
+					VisualScore: m.score,
 				})
 			}
 
 			groups = append(groups, SimilarityGroup{
-				BaseName: fmt.Sprintf("Visual Match: %s", currentGroup[0].Name),
+				BaseName: fmt.Sprintf("Visual Match: %s", currentGroup[0].file.Name),
 				Files:    fileInfos,
 			})
 		}
@@ -171,10 +177,11 @@ type SimilarityGroup struct {
 }
 
 type FileInfo struct {
-	Name    string
-	Path    string
-	Size    int64
-	Type    string
-	ModTime string
-	PHash   uint64
+	Name        string
+	Path        string
+	Size        int64
+	Type        string
+	ModTime     string
+	PHash       uint64
+	VisualScore float64
 }
