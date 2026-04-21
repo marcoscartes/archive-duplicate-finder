@@ -325,17 +325,23 @@ func (s *Server) Start() error {
 	})
 
 	api.Get("/all-files", func(c *fiber.Ctx) error {
+		log.Printf("📋 [API] Received request for all files from gallery")
+		
 		// Use the full scanned list if available, otherwise fallback to map-based collection
 		var files []reporter.FileInfo
 		if len(s.allFiles) > 0 {
 			files = s.allFiles
+			log.Printf("✅ [API] Using pre-computed allFiles list (%d files)", len(files))
 		} else {
+			log.Printf("⚠️  [API] Building files list from groups (pre-computed list empty)")
 			fileMap := make(map[string]reporter.FileInfo)
 			for _, group := range s.report.SizeGroups {
 				for _, file := range group.Files {
 					fileMap[file.Path] = file
 				}
 			}
+			log.Printf("📊 [API] Collected %d files from SizeGroups", len(fileMap))
+			
 			for _, group := range s.report.SimilarGroups {
 				for _, file := range group.Files {
 					fileMap[file.Path] = file
@@ -345,8 +351,10 @@ func (s *Server) Start() error {
 			for _, file := range fileMap {
 				files = append(files, file)
 			}
+			log.Printf("📊 [API] Final file list: %d unique files", len(files))
 		}
 
+		log.Printf("✅ [API] Returning %d files to gallery view", len(files))
 		return c.Status(200).JSON(fiber.Map{
 			"files": files,
 			"total": len(files),
@@ -357,9 +365,13 @@ func (s *Server) Start() error {
 	api.Get("/preview", func(c *fiber.Ctx) error {
 		path := c.Query("path")
 		internalPath := c.Query("internal_path")
+		previewType := c.Query("type", "preview")
+		
 		if path == "" {
 			return c.Status(400).SendString("Path is required")
 		}
+
+		log.Printf("🎬 [API] Preview request - Path: %s, Type: %s, InternalPath: %s", path, previewType, internalPath)
 
 		// Determine if it's a direct file or an archive
 		isArchive := false
@@ -367,17 +379,55 @@ func (s *Server) Start() error {
 		if ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || ext == ".gz" {
 			isArchive = true
 		}
+		
+		log.Printf("📦 [API] Archive: %v, Format: %s", isArchive, ext)
 
 		// 1. Handling when internalPath is NOT specified (Initial Gallery Load)
 		if internalPath == "" {
 			if !isArchive {
-				// Direct file (image, video, model): Send with correct content type
+				// Direct file (image, video, model)
+				log.Printf("📄 [API] Direct file (not archive), path: %s", path)
+				
+				// Special handling for STL files when format=png is requested
+				formatParam := c.Query("format")
+				if formatParam == "png" && ext == ".stl" {
+					log.Printf("🎚️  [API] STL render requested for direct file")
+					
+					// Read the STL file
+					data, err := os.ReadFile(path)
+					if err != nil {
+						log.Printf("❌ [API] Failed to read STL file: %v", err)
+						return c.Status(404).SendString("File not found")
+					}
+					log.Printf("✅ [API] Read STL file (%.1f KB)", float64(len(data))/1024)
+					
+					// Parse and render to PNG
+					info, err := stl.ParseSTL(data)
+					if err != nil {
+						log.Printf("❌ [API] Failed to parse STL file: %v", err)
+						return c.Status(422).SendString("Invalid STL file")
+					}
+					
+					pngData, err := stl.RenderToPNG(info, 800, 600)
+					if err != nil {
+						log.Printf("❌ [API] Failed to render STL to PNG: %v", err)
+						return c.Status(500).SendString("Render failed")
+					}
+					
+					log.Printf("✅ [API] STL rendered to PNG (%.1f KB)", float64(len(pngData))/1024)
+					c.Set("Content-Type", "image/png")
+					return c.Send(pngData)
+				}
+				
+				// Regular file: Send with correct content type
+				log.Printf("📄 [API] Sending direct file with type: %s", getContentType(path))
 				contentType := getContentType(path)
 				c.Set("Content-Type", contentType)
 				return c.SendFile(path)
 			}
 
 			// Check cache first
+			log.Printf("💾 [API] Archive, checking cache for preview path...")
 			info, _ := os.Stat(path)
 			modTime := ""
 			if info != nil {
@@ -385,28 +435,58 @@ func (s *Server) Start() error {
 			}
 
 			var found bool
-			if s.cache != nil && c.Query("type") != "model" {
+			if s.cache != nil && previewType != "model" {
 				internalPath, found = s.cache.GetPreviewPath(path, modTime)
 			}
 
 			if !found {
+				log.Printf("🔍 [API] Cache miss or model type, searching for preview in archive...")
+				
 				// Archive without internal path: Find the best preview filename efficiently
 				var filename string
 				var err error
 
-				if c.Query("type") == "model" {
+				if previewType == "model" {
+					log.Printf("🔍 [API] Searching for STL model in: %s", path)
 					filename, err = archive.FindBestSTLInArchive(path)
 				} else {
+					log.Printf("🔍 [API] Searching for any preview in: %s", path)
 					filename, err = archive.FindPreviewPathInArchive(path)
 				}
 
 				if err != nil {
-					return c.Status(404).SendString(err.Error())
+					errMsg := err.Error()
+					if strings.Contains(errMsg, "invalid filter") {
+						log.Printf("❌ [API] RAR file uses unsupported compression filter")
+						log.Printf("    Archive: %s", path)
+						log.Printf("    This RAR was likely created with WinRAR 5.0+ and uses compression methods not supported by Go's rardecode library")
+						log.Printf("    Workaround: Re-save the archive with an older version of WinRAR or convert to ZIP/7Z format")
+						return c.Status(415).SendString("RAR file uses unsupported compression (needs WinRAR 4.x compatibility)")
+					} else if strings.Contains(errMsg, "corrupted") || strings.Contains(errMsg, "broken") {
+						log.Printf("❌ [API] Archive appears corrupted: %v", err)
+						log.Printf("    Archive: %s", path)
+						log.Printf("    Try testing the archive integrity with WinRAR or 7-Zip")
+						return c.Status(422).SendString("Archive may be corrupted: " + errMsg)
+					} else if strings.Contains(errMsg, "no preview found") || strings.Contains(errMsg, "no files found") {
+						log.Printf("⚠️  [API] Archive found but no previewable files inside")
+						log.Printf("    Archive: %s", path)
+						log.Printf("    Supported preview types: *.jpg, *.png, *.webp, *.mp4, *.webm, *.stl, *.obj")
+						return c.Status(204).SendString("No previewable files found in archive")
+					} else {
+						log.Printf("❌ [API] Preview search failed: %v", err)
+						return c.Status(404).SendString(errMsg)
+					}
 				}
+				
+				log.Printf("✅ [API] Found preview: %s", filename)
 				internalPath = filename
+				foundExt := strings.ToLower(filepath.Ext(internalPath))
+				isFoundSTL := foundExt == ".stl"
+				log.Printf("📋 [API] Preview extension: %s (STL=%v)", foundExt, isFoundSTL)
 
 				// Save to cache (only if standard preview)
-				if s.cache != nil && c.Query("type") != "model" {
+				if s.cache != nil && previewType != "model" {
+					log.Printf("💾 [API] Saving to cache...")
 					s.cache.PutPreviewPath(path, internalPath, modTime)
 				}
 			}
@@ -425,19 +505,34 @@ func (s *Server) Start() error {
 		}, cacheKey)
 
 		// Determine actual cache path (STL rendering produces PNGs)
-		isSTRRender := strings.ToLower(filepath.Ext(internalPath)) == ".stl" && c.Query("format") == "png"
+		// ALWAYS render STLs to PNG for gallery preview (regardless of format param)
+		isSTRRender := strings.ToLower(filepath.Ext(internalPath)) == ".stl"
 		if isSTRRender {
 			fileExt = ".png"
+			// Use different cache key for STL-to-PNG rendering to avoid conflicts with old STL cache
+			cacheKey = cacheKey + "_stl_png_render"
+			log.Printf("🎚️  [API] STL detected - will render to PNG, using separate cache key: %s", cacheKey)
+		} else {
+			log.Printf("📝 [API] Non-STL file - ext=%s, no rendering needed", filepath.Ext(internalPath))
 		}
 
 		// 1. Try to get thumbnail from DB cache
 		if s.cache != nil {
 			if cachedData, cType, ok := s.cache.GetThumbnail(cacheKey); ok {
-				c.Set("X-Internal-Path", internalPath)
-				c.Set("Content-Type", cType)
-				return c.Send(cachedData)
+				log.Printf("✅ [API] Thumbnail found in cache (%.1f KB, type: %s)", float64(len(cachedData))/1024, cType)
+				
+				// Security check: if it's supposed to be PNG but cache says STL, ignore it (corrupted cache)
+				if isSTRRender && cType != "image/png" && cType != "image/jpeg" {
+					log.Printf("⚠️  [API] Cache has wrong type for STL render (%s), re-rendering", cType)
+				} else {
+					c.Set("X-Internal-Path", internalPath)
+					c.Set("Content-Type", cType)
+					return c.Send(cachedData)
+				}
 			}
 		}
+
+		log.Printf("🔓 [API] Thumbnail not in cache, extracting from archive...")
 
 		// 2. Fallback to extracting it (limited concurrency)
 		// Register this file as being actively extracted so that a concurrent
@@ -451,32 +546,51 @@ func (s *Server) Start() error {
 			existingWg := actual.(*sync.WaitGroup)
 			existingWg.Add(1)
 			wg = existingWg
+			log.Printf("🔄 [API] Joining existing extraction for: %s", path)
 		}
 
 		s.previewSem <- struct{}{}
+		log.Printf("🔓 [API] Extracting: %s from %s", internalPath, path)
+		
 		data, err := archive.GetFileFromArchive(path, internalPath)
 		if err != nil {
 			<-s.previewSem
 			wg.Done()
 			s.activePreviewFiles.Delete(path)
+			log.Printf("❌ [API] Extraction failed: %v", err)
 			return c.Status(404).SendString(err.Error())
 		}
+		
+		log.Printf("✅ [API] Extracted successfully (%.1f KB)", float64(len(data))/1024)
 
 		// SPECIAL CASE: If it's an STL and we want a PNG preview
+		stlRenderFailed := false
 		if isSTRRender {
+			log.Printf("🎚️  [API] Starting STL render - internalPath: %s (len: %d)", internalPath, len(internalPath))
 			info, err := stl.ParseSTL(data)
 			if err == nil {
+				log.Printf("✅ [API] STL parsed successfully - triangles: %d", info.TriangleCount)
 				pngData, err := stl.RenderToPNG(info, 800, 600)
 				if err == nil {
 					data = pngData
+					log.Printf("✅ [API] STL rendered to PNG (%.1f KB)", float64(len(data))/1024)
+				} else {
+					log.Printf("❌ [API] Failed to render STL: %v", err)
+					stlRenderFailed = true
 				}
+			} else {
+				log.Printf("❌ [API] Failed to parse STL: %v", err)
+				stlRenderFailed = true
 			}
+		} else {
+			log.Printf("📝 [API] Skipped STL render - isSTRRender: %v", isSTRRender)
 		}
 		<-s.previewSem
 		wg.Done()
 		s.activePreviewFiles.Delete(path)
 
 		contentType := getContentType(cacheKey + fileExt)
+		log.Printf("📊 [API] Content type: %s", contentType)
 		
 		// If it's an image, resize it to max 256x256
 		if strings.HasPrefix(contentType, "image/") {
@@ -484,25 +598,34 @@ func (s *Server) Start() error {
 			if err == nil {
 				bounds := img.Bounds()
 				if bounds.Dx() > 256 || bounds.Dy() > 256 {
+					log.Printf("🖼️  [API] Resizing image from %dx%d to 256x256", bounds.Dx(), bounds.Dy())
 					img = resize.Thumbnail(256, 256, img, resize.Bilinear)
 					buf := new(bytes.Buffer)
 					// Encode to JPEG to save space
 					if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 80}); err == nil {
 						data = buf.Bytes()
 						contentType = "image/jpeg"
+						log.Printf("✅ [API] Image compressed and resized (%.1f KB)", float64(len(data))/1024)
 					}
 				}
 			}
 		}
 
 		if s.cache != nil {
-			s.cache.PutThumbnail(cacheKey, data, contentType)
-			// Enforce limit
-			go s.checkCacheLimit()
+			// Only cache if: not an STL or STL was successfully rendered
+			if !isSTRRender || (isSTRRender && !stlRenderFailed) {
+				log.Printf("💾 [API] Saving thumbnail to cache...")
+				s.cache.PutThumbnail(cacheKey, data, contentType)
+				// Enforce limit
+				go s.checkCacheLimit()
+			} else {
+				log.Printf("⚠️  [API] Not caching failed STL render (will retry next request)")
+			}
 		}
 
 		c.Set("X-Internal-Path", internalPath)
 		c.Set("Content-Type", contentType)
+		log.Printf("✅ [API] Returning preview (%.1f KB, type: %s)", float64(len(data))/1024, contentType)
 		return c.Send(data)
 	})
 

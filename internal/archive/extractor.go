@@ -40,7 +40,13 @@ func ExtractArchive(archivePath string) (map[string][]byte, error) {
 // ListPreviewsInArchive returns a list of all files that can be used as previews
 // Now supports 1-level of recursive archive inspection
 func ListPreviewsInArchive(archivePath string) ([]PreviewInfo, error) {
+	log.Printf("📋 [ARCHIVE] Listing preview candidates in: %s", archivePath)
 	previews, err := listPreviewsInArchiveInternal(archivePath, 1) // 1 level of recursion
+	if err != nil {
+		log.Printf("❌ [ARCHIVE] Error listing previews: %v", err)
+		return nil, err
+	}
+	log.Printf("✅ [ARCHIVE] Found %d preview candidates total", len(previews))
 	return previews, err
 }
 
@@ -54,6 +60,20 @@ func listPreviewsInArchiveInternal(archivePath string, depth int) ([]PreviewInfo
 		files, err = listFilesZIP(archivePath)
 	case ".rar":
 		files, err = listFilesRAR(archivePath)
+		// Handle RAR-specific errors with more context
+		if err != nil {
+			if strings.Contains(err.Error(), "invalid filter") {
+				log.Printf("⚠️  [ARCHIVE] RAR file uses unsupported compression filter: %s", archivePath)
+				log.Printf("    This RAR version may be too new or use WinRAR 5.0+ features")
+				log.Printf("    Error details: %v", err)
+				// Return empty list instead of failing completely
+				return nil, fmt.Errorf("RAR uses unsupported compression: %w", err)
+			} else if strings.Contains(err.Error(), "broken file header") || strings.Contains(err.Error(), "corrupt") {
+				log.Printf("⚠️  [ARCHIVE] RAR file appears corrupted: %s", archivePath)
+				log.Printf("    Error details: %v", err)
+				return nil, fmt.Errorf("corrupted RAR file: %w", err)
+			}
+		}
 	case ".7z":
 		files, err = listFiles7Z(archivePath)
 	default:
@@ -61,6 +81,7 @@ func listPreviewsInArchiveInternal(archivePath string, depth int) ([]PreviewInfo
 	}
 
 	if err != nil {
+		log.Printf("❌ [ARCHIVE] Failed to read %s archive: %v", ext, err)
 		return nil, err
 	}
 
@@ -79,6 +100,7 @@ func listPreviewsInArchiveInternal(archivePath string, depth int) ([]PreviewInfo
 	for _, nested := range nestedArchives {
 		data, err := GetFileFromArchive(archivePath, nested)
 		if err != nil {
+			log.Printf("⚠️  [ARCHIVE] Skipping nested archive (extraction failed): %s", nested)
 			continue
 		}
 
@@ -100,6 +122,8 @@ func listPreviewsInArchiveInternal(archivePath string, depth int) ([]PreviewInfo
 					Size: np.Size,
 				})
 			}
+		} else {
+			log.Printf("⚠️  [ARCHIVE] Could not read nested archive: %s (%v)", nested, err)
 		}
 	}
 
@@ -146,13 +170,32 @@ func FindPreviewInArchive(archivePath string) ([]byte, string, error) {
 
 // FindPreviewPathInArchive returns the internal path of the best preview candidate
 func FindPreviewPathInArchive(archivePath string) (string, error) {
+	log.Printf("🔍 [ARCHIVE] Searching for preview in: %s", archivePath)
+	
 	previews, err := ListPreviewsInArchive(archivePath)
 	if err != nil {
+		log.Printf("❌ [ARCHIVE] Error listing previews in %s: %v", archivePath, err)
+		// Even if listing fails, try to find STLs directly as fallback
+		log.Printf("🔄 [ARCHIVE] Attempting fallback: searching for STLs directly...")
+		stlPath, stlErr := findFirstSTLDirectly(archivePath)
+		if stlErr == nil {
+			log.Printf("✅ [ARCHIVE] Found STL via fallback: %s", stlPath)
+			return stlPath, nil
+		}
 		return "", err
 	}
+	
 	if len(previews) == 0 {
+		log.Printf("⚠️  [ARCHIVE] No preview files found, trying to find STLs directly...")
+		stlPath, err := findFirstSTLDirectly(archivePath)
+		if err == nil {
+			log.Printf("✅ [ARCHIVE] Found STL: %s", stlPath)
+			return stlPath, nil
+		}
 		return "", fmt.Errorf("no preview found")
 	}
+	
+	log.Printf("📂 [ARCHIVE] Found %d previewable files in archive", len(previews))
 
 	// 1. Find largest image
 	var bestImage string
@@ -164,6 +207,7 @@ func FindPreviewPathInArchive(archivePath string) (string, error) {
 		}
 	}
 	if bestImage != "" {
+		log.Printf("🖼️  [ARCHIVE] Selected largest image: %s (%.1f KB)", bestImage, float64(maxImgSize)/1024)
 		return bestImage, nil
 	}
 
@@ -177,12 +221,14 @@ func FindPreviewPathInArchive(archivePath string) (string, error) {
 		}
 	}
 	if bestVideo != "" {
+		log.Printf("🎬 [ARCHIVE] Selected largest video: %s (%.1f MB)", bestVideo, float64(maxVidSize)/(1024*1024))
 		return bestVideo, nil
 	}
 
 	// 3. Find Model with keywords
 	for _, f := range previews {
 		if isModelFile(f.Path) && hasKeyword(f.Path) {
+			log.Printf("📦 [ARCHIVE] Selected model with keyword: %s", f.Path)
 			return f.Path, nil
 		}
 	}
@@ -197,9 +243,18 @@ func FindPreviewPathInArchive(archivePath string) (string, error) {
 		}
 	}
 	if bestModel != "" {
+		log.Printf("📦 [ARCHIVE] Selected largest model: %s (%.1f KB)", bestModel, float64(maxModelSize)/1024)
 		return bestModel, nil
 	}
 
+	log.Printf("⚠️  [ARCHIVE] No suitable preview found, trying fallback STL search...")
+	stlPath, err := findFirstSTLDirectly(archivePath)
+	if err == nil {
+		log.Printf("✅ [ARCHIVE] Found STL via fallback: %s", stlPath)
+		return stlPath, nil
+	}
+
+	log.Printf("⚠️  [ARCHIVE] No suitable preview found in: %s (checked %d files)", archivePath, len(previews))
 	return "", fmt.Errorf("no preview found")
 }
 
@@ -207,10 +262,11 @@ func FindPreviewPathInArchive(archivePath string) (string, error) {
 func FindBestSTLInArchive(archivePath string) (string, error) {
 	previews, err := ListPreviewsInArchive(archivePath)
 	if err != nil {
-		return "", err
+		// Fallback to direct search if ListPreviewsInArchive fails
+		return findFirstSTLDirectly(archivePath)
 	}
 	if len(previews) == 0 {
-		return "", fmt.Errorf("no files found")
+		return findFirstSTLDirectly(archivePath)
 	}
 
 	// 1. Find Model with keywords
@@ -233,7 +289,122 @@ func FindBestSTLInArchive(archivePath string) (string, error) {
 		return bestModel, nil
 	}
 
-	return "", fmt.Errorf("no 3D model found")
+	// 3. Try fallback direct search
+	return findFirstSTLDirectly(archivePath)
+}
+
+// findFirstSTLDirectly searches for STL files directly without using ListPreviewsInArchive
+// This is useful when the archive readers have issues or when inline searching is needed
+func findFirstSTLDirectly(archivePath string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(archivePath))
+	log.Printf("🔎 [ARCHIVE] Direct STL search in %s (%s format)", archivePath, ext)
+
+	switch ext {
+	case ".zip":
+		return findFirstSTLZIPDirect(archivePath)
+	case ".rar":
+		return findFirstSTLRARDirect(archivePath)
+	case ".7z":
+		return findFirstSTL7ZDirect(archivePath)
+	default:
+		return "", fmt.Errorf("unsupported archive format: %s", ext)
+	}
+}
+
+func findFirstSTLZIPDirect(archivePath string) (string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open ZIP for direct STL search: %w", err)
+	}
+	defer reader.Close()
+
+	// 1. Priority: STL with keywords
+	for _, file := range reader.File {
+		name := strings.ReplaceAll(file.Name, "\\", "/")
+		if !file.FileInfo().IsDir() && isSTLFile(name) && hasKeyword(name) {
+			log.Printf("✅ Found STL with keyword: %s", name)
+			return name, nil
+		}
+	}
+
+	// 2. Fallback: First STL found
+	for _, file := range reader.File {
+		name := strings.ReplaceAll(file.Name, "\\", "/")
+		if !file.FileInfo().IsDir() && isSTLFile(name) {
+			log.Printf("✅ Found first STL: %s", name)
+			return name, nil
+		}
+	}
+
+	return "", fmt.Errorf("no STL found in ZIP")
+}
+
+func findFirstSTLRARDirect(archivePath string) (string, error) {
+	reader, err := rardecode.OpenReader(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open RAR for direct STL search: %w", err)
+	}
+	defer reader.Close()
+
+	// 1. Priority: STL with keywords
+	stlFiles := []string{} // Store for fallback
+
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("error reading RAR: %w", err)
+		}
+
+		name := strings.ReplaceAll(header.Name, "\\", "/")
+		if !header.IsDir && isSTLFile(name) {
+			if hasKeyword(name) {
+				log.Printf("✅ Found STL with keyword: %s", name)
+				return name, nil
+			}
+			stlFiles = append(stlFiles, name)
+		}
+	}
+
+	// 2. Fallback: First STL found
+	if len(stlFiles) > 0 {
+		log.Printf("✅ Found first STL: %s", stlFiles[0])
+		return stlFiles[0], nil
+	}
+
+	return "", fmt.Errorf("no STL found in RAR")
+}
+
+func findFirstSTL7ZDirect(archivePath string) (string, error) {
+	reader, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open 7Z for direct STL search: %w", err)
+	}
+	defer reader.Close()
+
+	// 1. Priority: STL with keywords
+	stlFiles := []string{} // Store for fallback
+
+	for _, file := range reader.File {
+		name := strings.ReplaceAll(file.Name, "\\", "/")
+		if !file.FileInfo().IsDir() && isSTLFile(name) {
+			if hasKeyword(name) {
+				log.Printf("✅ Found STL with keyword: %s", name)
+				return name, nil
+			}
+			stlFiles = append(stlFiles, name)
+		}
+	}
+
+	// 2. Fallback: First STL found
+	if len(stlFiles) > 0 {
+		log.Printf("✅ Found first STL: %s", stlFiles[0])
+		return stlFiles[0], nil
+	}
+
+	return "", fmt.Errorf("no STL found in 7Z")
 }
 
 func isModelFile(filename string) bool {
@@ -938,10 +1109,12 @@ func GetFileFromArchive(archivePath, filename string) ([]byte, error) {
 	// Recursive extraction for nested archives
 	if strings.Contains(filename, "::") {
 		parts := strings.Split(filename, "::")
+		log.Printf("📦 [ARCHIVE] Extracting nested file with %d levels: %v", len(parts), parts)
 
 		// Extract first level
 		currentData, err := GetFileFromArchive(archivePath, parts[0])
 		if err != nil {
+			log.Printf("❌ [ARCHIVE] Failed to extract level 1 (%s): %v", parts[0], err)
 			return nil, err
 		}
 
@@ -950,6 +1123,7 @@ func GetFileFromArchive(archivePath, filename string) ([]byte, error) {
 			// Write current level to temp file
 			tmpFile, err := os.CreateTemp("", "nest-ext-*"+filepath.Ext(parts[i-1]))
 			if err != nil {
+				log.Printf("❌ [ARCHIVE] Failed to create temp file for level %d: %v", i, err)
 				return nil, err
 			}
 			tmpFile.Write(currentData)
@@ -957,27 +1131,43 @@ func GetFileFromArchive(archivePath, filename string) ([]byte, error) {
 			tmpFile.Close()
 			defer os.Remove(tmpPath)
 
+			log.Printf("📦 [ARCHIVE] Extracting nested level %d/%d: %s", i+1, len(parts), parts[i])
+
 			// Extract next level from this temp file
 			currentData, err = GetFileFromArchive(tmpPath, parts[i])
 			if err != nil {
+				log.Printf("❌ [ARCHIVE] Failed to extract level %d (%s): %v", i+1, parts[i], err)
 				return nil, err
 			}
 		}
+		log.Printf("✅ [ARCHIVE] Successfully extracted nested file (total size: %d bytes)", len(currentData))
 		return currentData, nil
 	}
 
 	ext := strings.ToLower(filepath.Ext(archivePath))
+	log.Printf("🔓 [ARCHIVE] Extracting %s from archive: %s", filename, archivePath)
 
+	var data []byte
+	var err error
+	
 	switch ext {
 	case ".zip":
-		return getFileZIP(archivePath, filename)
+		data, err = getFileZIP(archivePath, filename)
 	case ".rar":
-		return getFileRAR(archivePath, filename)
+		data, err = getFileRAR(archivePath, filename)
 	case ".7z":
-		return getFile7Z(archivePath, filename)
+		data, err = getFile7Z(archivePath, filename)
 	default:
 		return nil, fmt.Errorf("unsupported archive format for extraction: %s", ext)
 	}
+	
+	if err != nil {
+		log.Printf("❌ [ARCHIVE] Failed to extract %s: %v", filename, err)
+		return nil, err
+	}
+	
+	log.Printf("✅ [ARCHIVE] Extracted %s successfully (%.1f KB)", filename, float64(len(data))/1024)
+	return data, nil
 }
 
 func getFileZIP(archivePath, filename string) ([]byte, error) {

@@ -566,8 +566,8 @@ export default function GalleryPage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [gridHeight, setGridHeight] = useState(0)
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
-    const [sortField, setSortField] = useState<'name' | 'size' | 'mod_time'>('name')
-    const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
+    const [sortField, setSortField] = useState<'name' | 'size' | 'mod_time'>('mod_time')
+    const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
     const [filterExt, setFilterExt] = useState<'all' | 'zip' | 'rar' | '7z' | 'stl' | 'obj'>('all')
     const [page, setPage] = useState(1)
     const PAGE_SIZE = 60
