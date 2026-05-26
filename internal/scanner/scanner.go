@@ -362,16 +362,45 @@ func GetRootPaths() []string {
 
 // ScanMultiplePaths scans multiple root paths for archive and model files
 func ScanMultiplePaths(paths []string, recursive bool) ([]ArchiveFile, error) {
-	// Try to use Everything if available on Windows
-	if runtime.GOOS == "windows" && IsEverythingAvailable() {
-		log.Println("⚡ Everything database detected - using fast indexed search...")
-		files, err := ScanWithEverything()
-		if err == nil && len(files) > 0 {
-			log.Printf("✅ Found %d files using Everything", len(files))
-			return files, nil
+	// Try to use OS-specific indexed databases first
+	switch runtime.GOOS {
+	case "windows":
+		if IsEverythingAvailable() {
+			log.Println("⚡ Everything database detected - using fast indexed search...")
+			files, err := ScanWithEverything()
+			if err == nil && len(files) > 0 {
+				log.Printf("✅ Found %d files using Everything", len(files))
+				return files, nil
+			}
+			if err != nil {
+				log.Printf("⚠️ Everything search failed, falling back to directory scan: %v", err)
+			}
 		}
-		if err != nil {
-			log.Printf("⚠️ Everything search failed, falling back to directory scan: %v", err)
+
+	case "darwin":
+		if IsMdfindAvailable() {
+			log.Println("⚡ Spotlight database detected - using fast indexed search...")
+			files, err := ScanWithMdfind()
+			if err == nil && len(files) > 0 {
+				log.Printf("✅ Found %d files using Spotlight", len(files))
+				return files, nil
+			}
+			if err != nil {
+				log.Printf("⚠️ Spotlight search failed, falling back to directory scan: %v", err)
+			}
+		}
+
+	case "linux":
+		if IsLocateAvailable() {
+			log.Println("⚡ Locate database detected - using fast indexed search...")
+			files, err := ScanWithLocate()
+			if err == nil && len(files) > 0 {
+				log.Printf("✅ Found %d files using locate", len(files))
+				return files, nil
+			}
+			if err != nil {
+				log.Printf("⚠️ Locate search failed, falling back to directory scan: %v", err)
+			}
 		}
 	}
 
@@ -552,6 +581,189 @@ func ScanWithEverything() ([]ArchiveFile, error) {
 	}
 
 	wg.Wait()
+
+	return files, nil
+}
+
+// IsLocateAvailable checks if locate command is available on Linux/macOS
+func IsLocateAvailable() bool {
+	_, err := exec.LookPath("locate")
+	return err == nil
+}
+
+// ScanWithLocate scans for archive/model files using the locate command (Linux/macOS)
+func ScanWithLocate() ([]ArchiveFile, error) {
+	if !IsLocateAvailable() {
+		return nil, fmt.Errorf("locate command is not available")
+	}
+
+	var files []ArchiveFile
+	mu := sync.Mutex{}
+
+	// Archive extensions
+	archiveExts := []string{
+		"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "cab",
+	}
+
+	// Model extensions
+	modelExts := []string{
+		"stl", "obj", "3ds", "fbx", "blend", "step", "stp", "iges", "igs",
+		"ply", "off", "3mf", "glb", "gltf",
+	}
+
+	// Video extensions
+	videoExts := []string{
+		"mp4", "webm", "mkv", "avi", "mov", "wmv", "flv",
+	}
+
+	allExts := append(append(archiveExts, modelExts...), videoExts...)
+
+	searchExtension := func(ext string) {
+		// Use locate to search for files with extension
+		cmd := exec.Command("locate", "-i", "*."+ext)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			return
+		}
+
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			filePath := strings.TrimSpace(scanner.Text())
+			if filePath == "" {
+				continue
+			}
+
+			// Skip system folders
+			if isSystemFolder(filePath) {
+				continue
+			}
+
+			info, err := os.Stat(filePath)
+			if err != nil {
+				continue
+			}
+
+			if info.IsDir() {
+				continue
+			}
+
+			fileType := getArchiveType(filePath)
+			if fileType != "" {
+				mu.Lock()
+				files = append(files, ArchiveFile{
+					Name:    filepath.Base(filePath),
+					Path:    filePath,
+					Size:    info.Size(),
+					Type:    fileType,
+					ModTime: info.ModTime(),
+				})
+				mu.Unlock()
+			}
+		}
+
+		cmd.Wait()
+	}
+
+	// Search extensions sequentially with locate (it's fast enough)
+	for _, ext := range allExts {
+		searchExtension(ext)
+	}
+
+	return files, nil
+}
+
+// IsMdfindAvailable checks if mdfind (Spotlight) is available on macOS
+func IsMdfindAvailable() bool {
+	_, err := exec.LookPath("mdfind")
+	return err == nil
+}
+
+// ScanWithMdfind scans for archive/model files using Spotlight (macOS)
+func ScanWithMdfind() ([]ArchiveFile, error) {
+	if !IsMdfindAvailable() {
+		return nil, fmt.Errorf("mdfind command is not available")
+	}
+
+	var files []ArchiveFile
+	mu := sync.Mutex{}
+
+	// Archive extensions
+	archiveExts := []string{
+		"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "cab",
+	}
+
+	// Model extensions
+	modelExts := []string{
+		"stl", "obj", "3ds", "fbx", "blend", "step", "stp", "iges", "igs",
+		"ply", "off", "3mf", "glb", "gltf",
+	}
+
+	// Video extensions
+	videoExts := []string{
+		"mp4", "webm", "mkv", "avi", "mov", "wmv", "flv",
+	}
+
+	allExts := append(append(archiveExts, modelExts...), videoExts...)
+
+	searchExtension := func(ext string) {
+		// mdfind searches Spotlight index: -name looks for files, -onlyin limits scope
+		query := fmt.Sprintf("filename:%s.%s", "*", ext)
+		cmd := exec.Command("mdfind", query)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			return
+		}
+
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			filePath := strings.TrimSpace(scanner.Text())
+			if filePath == "" {
+				continue
+			}
+
+			// Skip system folders
+			if isSystemFolder(filePath) {
+				continue
+			}
+
+			info, err := os.Stat(filePath)
+			if err != nil {
+				continue
+			}
+
+			if info.IsDir() {
+				continue
+			}
+
+			fileType := getArchiveType(filePath)
+			if fileType != "" {
+				mu.Lock()
+				files = append(files, ArchiveFile{
+					Name:    filepath.Base(filePath),
+					Path:    filePath,
+					Size:    info.Size(),
+					Type:    fileType,
+					ModTime: info.ModTime(),
+				})
+				mu.Unlock()
+			}
+		}
+
+		cmd.Wait()
+	}
+
+	// Search extensions sequentially with mdfind
+	for _, ext := range allExts {
+		searchExtension(ext)
+	}
 
 	return files, nil
 }
