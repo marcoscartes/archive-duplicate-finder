@@ -7,14 +7,15 @@ import (
 )
 
 type AppConfig struct {
-	Directory    string  `json:"directory"`
-	TrashPath    string  `json:"trash_path"`
-	Threshold    int     `json:"threshold"`
-	Recursive    bool    `json:"recursive"`
-	LeaveRef     bool    `json:"leave_ref"`
-	DeleteMode   string  `json:"delete_mode"`
-	Port         int     `json:"port"`
-	CacheLimitGB float64 `json:"cache_limit_gb"`
+	Directory     string  `json:"directory"`
+	TrashPath     string  `json:"trash_path"`
+	Threshold     int     `json:"threshold"`
+	Recursive     bool    `json:"recursive"`
+	LeaveRef      bool    `json:"leave_ref"`
+	DeleteMode    string  `json:"delete_mode"`
+	Port          int     `json:"port"`
+	CacheLimitGB  float64 `json:"cache_limit_gb"`
+	ScanFullSystem bool   `json:"scan_full_system"`
 }
 
 func GetConfigPath() string {

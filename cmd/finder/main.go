@@ -45,6 +45,7 @@ type Config struct {
 	RunStep3    bool   // Explicitly run Step 3 (Similarity Check)
 	Version     bool   // Show version and exit
 	Info        bool   // Show author and info and exit
+	FullSystem  bool   // Scan full system instead of single directory
 }
 
 func main() {
@@ -86,21 +87,29 @@ func main() {
 		flagConfig.Web = true // Default to web if launched without args
 	}
 
-	// Validate directory
-	if _, err := os.Stat(flagConfig.Directory); os.IsNotExist(err) {
-		if isExplicitScan {
-			log.Fatalf("❌ Directory does not exist: %s", flagConfig.Directory)
-		} else {
-			log.Printf("⚠️ Saved directory no longer exists: %s. Starting web setup...", flagConfig.Directory)
-			startWebServer(flagConfig, nil, nil, nil, appConfig, nil, nil)
-			// Block indefinitely
-			select {}
+	// Validate directory (unless full-system mode)
+	if !flagConfig.FullSystem && flagConfig.Directory != "." {
+		if _, err := os.Stat(flagConfig.Directory); os.IsNotExist(err) {
+			if isExplicitScan {
+				log.Fatalf("❌ Directory does not exist: %s", flagConfig.Directory)
+			} else {
+				log.Printf("⚠️ Saved directory no longer exists: %s. Starting web setup...", flagConfig.Directory)
+				startWebServer(flagConfig, nil, nil, nil, appConfig, nil, nil)
+				// Block indefinitely
+				select {}
+			}
 		}
 	}
 
 	log.Printf("🔍 Archive Duplicate Finder")
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	log.Printf("📂 Scanning directory: %s", flagConfig.Directory)
+	
+	if flagConfig.FullSystem {
+		log.Printf("📂 Scanning full system")
+	} else {
+		log.Printf("📂 Scanning directory: %s", flagConfig.Directory)
+	}
+	
 	log.Printf("🎯 Similarity threshold: %d%%", flagConfig.Threshold)
 	log.Printf("🔧 Mode: %s", flagConfig.Mode)
 	if flagConfig.Debug {
@@ -115,9 +124,21 @@ func main() {
 
 	// Step 1: Scan for archive files
 	log.Println("📦 Step 1: Scanning for archive files...")
-	files, err := scanner.ScanDirectory(flagConfig.Directory, flagConfig.Recursive)
+	var files []scanner.ArchiveFile
+	var err error
+	
+	if flagConfig.FullSystem {
+		// Scan multiple root paths
+		rootPaths := scanner.GetRootPaths()
+		log.Printf("🔍 Detected root paths: %v", rootPaths)
+		files, err = scanner.ScanMultiplePaths(rootPaths, flagConfig.Recursive)
+	} else {
+		// Scan single directory
+		files, err = scanner.ScanDirectory(flagConfig.Directory, flagConfig.Recursive)
+	}
+	
 	if err != nil {
-		log.Fatalf("❌ Failed to scan directory: %v", err)
+		log.Fatalf("❌ Failed to scan: %v", err)
 	}
 
 	log.Printf("✅ Found %d archive files", len(files))
@@ -408,6 +429,7 @@ func parseFlags() Config {
 	flag.IntVar(&config.Port, "port", 8080, "Web server port")
 	flag.BoolVar(&config.Debug, "debug", false, "Enable detailed debug logging for troubleshooting")
 	flag.BoolVar(&config.RunStep3, "check-similar", false, "Explicitly run Step 3 (Similarity Check). Default is on-demand.")
+	flag.BoolVar(&config.FullSystem, "full-system", false, "Scan entire system instead of a single directory")
 	flag.BoolVar(&config.Version, "version", false, "Show version information and exit")
 	flag.BoolVar(&config.Info, "info", false, "Show project information, author and license")
 

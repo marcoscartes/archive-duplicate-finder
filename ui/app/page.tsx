@@ -67,6 +67,7 @@ interface AppConfig {
   recursive: boolean
   leave_ref: boolean
   delete_mode: string
+  scan_full_system: boolean
 }
 
 function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => void, isLoading: boolean }) {
@@ -76,7 +77,8 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
     threshold: 70,
     recursive: true,
     leave_ref: false,
-    delete_mode: 'oldest'
+    delete_mode: 'oldest',
+    scan_full_system: false
   })
 
   useEffect(() => {
@@ -109,7 +111,15 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
 
         <div className="space-y-8">
           <div className="space-y-3">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Scan Directory</label>
+            <div className="flex items-center justify-between ml-2">
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Scan Mode</label>
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${config.scan_full_system ? 'bg-purple-600 border-purple-600 shadow-lg shadow-purple-500/20' : 'border-glass-border group-hover:border-purple-500/40'}`} onClick={() => setConfig({ ...config, scan_full_system: !config.scan_full_system })}>
+                  {config.scan_full_system && <CheckCircle2 className="w-3 h-3 text-white" />}
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400">Full PC Scan</span>
+              </label>
+            </div>
             <div className="relative group">
               <Folder className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-blue-500 transition-colors" />
               <input
@@ -117,9 +127,13 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
                 placeholder="C:\Users\...\MyAssets"
                 value={config.directory}
                 onChange={(e) => setConfig({ ...config, directory: e.target.value })}
-                className="w-full bg-glass-layer border border-glass-border rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-glass-layer transition-all"
+                disabled={config.scan_full_system}
+                className="w-full bg-glass-layer border border-glass-border rounded-2xl py-5 pl-14 pr-6 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-glass-layer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
+            {config.scan_full_system && (
+              <p className="text-xs text-purple-400/70 ml-2">🔍 Will scan all available drives (C:, D:, etc. on Windows; /Users, /Volumes on macOS; /home, /mnt on Linux)</p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -171,7 +185,7 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
 
           <button
             onClick={() => onStart(config)}
-            disabled={!config.directory || isLoading}
+            disabled={(!config.directory && !config.scan_full_system) || isLoading}
             className="w-full py-6 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 rounded-3xl text-sm font-black uppercase tracking-[0.3em] text-white shadow-2xl shadow-blue-500/20 transition-all active:scale-95 flex items-center justify-center gap-4 disabled:opacity-50 disabled:grayscale transition-all"
           >
             {isLoading ? (

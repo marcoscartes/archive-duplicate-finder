@@ -21,7 +21,7 @@ func ProcessVisualHashes(files []scanner.ArchiveFile, cache *db.Cache, debug boo
 	var mu sync.Mutex
 
 	// Use a worker pool to avoid resource exhaustion
-	workerCount := 4
+	workerCount := 16
 	jobs := make(chan scanner.ArchiveFile, total)
 	var wg sync.WaitGroup
 

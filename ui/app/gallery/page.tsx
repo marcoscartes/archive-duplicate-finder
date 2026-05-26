@@ -103,13 +103,17 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
         }
 
         setLoading(true)
-        fetch(url)
-            .then(res => {
+        
+        // Parallel preview loading with prefetch
+        const controller = new AbortController()
+        
+        const loadPreview = async () => {
+            try {
+                const res = await fetch(url, { signal: controller.signal })
                 if (!res.ok) throw new Error('No preview')
                 const contentType = res.headers.get('content-type') || ''
-                return res.blob().then(blob => ({ blob, contentType }))
-            })
-            .then(({ blob, contentType }) => {
+                const blob = await res.blob()
+                
                 const objectUrl = URL.createObjectURL(blob)
                 const isVideoExt = file.path.toLowerCase().match(/\.(mp4|webm|mkv|mov|avi)$/)
                 let type: 'image' | 'model' | 'video' = isVideoExt ? 'video' : 'image'
@@ -117,14 +121,20 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
                 else if (contentType.startsWith('video/')) type = 'video'
 
                 setPreviewData({ url: type === 'video' ? url : objectUrl, type })
-                if (type === 'video') URL.revokeObjectURL(objectUrl) // Don't need the blob for video
+                if (type === 'video') URL.revokeObjectURL(objectUrl)
                 setLoading(false)
-            })
-            .catch((err) => {
-                console.error('Preview load error:', err)
-                setError(true)
+            } catch (err) {
+                if (err instanceof Error && err.name !== 'AbortError') {
+                    console.error('Preview load error:', err)
+                    setError(true)
+                }
                 setLoading(false)
-            })
+            }
+        }
+
+        loadPreview()
+
+        return () => controller.abort()
     }, [isVisible, file.path, file.type])
 
     // Cleanup blob URL only when component unmounts (only for images/models)

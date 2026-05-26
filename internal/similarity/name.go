@@ -17,31 +17,64 @@ type SimilarityGroup struct {
 
 // FindSimilarGroups uses an aggressive normalization strategy to cluster files efficiently (O(N))
 // instead of comparing every file with every other file (O(N^2)).
-// FindSimilarGroups uses an aggressive normalization strategy to cluster files efficiently (O(N))
-// instead of comparing every file with every other file (O(N^2)).
 func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress func(float64)) []SimilarityGroup {
 	if len(files) < 2 {
 		return nil
 	}
 
-	// 1. Group by "Canonical Key"
+	// 1. Group by "Canonical Key" - Parallel version
 	// We map: CanonicalKey -> []ArchiveFile
 	grouped := make(map[string][]scanner.ArchiveFile)
 	var mu sync.Mutex
 
 	totalFiles := len(files)
-	batchSize := 1000 // Update progress every N files
-
-	// Parallelize the normalization step if N is huge, but usually simple loop is fine.
-	// For 70k files, a single thread map insert is ~50ms.
-	for i, f := range files {
-		key := generateCanonicalKey(f.Name)
+	
+	// Parallel grouping using worker pool
+	numWorkers := 8
+	if totalFiles < 1000 {
+		numWorkers = 2
+	}
+	
+	jobs := make(chan scanner.ArchiveFile, len(files))
+	results := make(chan struct{key string; file scanner.ArchiveFile}, len(files))
+	var wg sync.WaitGroup
+	
+	// Workers to generate keys in parallel
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for f := range jobs {
+				key := generateCanonicalKey(f.Name)
+				results <- struct{key string; file scanner.ArchiveFile}{key, f}
+			}
+		}()
+	}
+	
+	// Collector goroutine
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	
+	// Send jobs
+	go func() {
+		for _, f := range files {
+			jobs <- f
+		}
+		close(jobs)
+	}()
+	
+	// Collect results and group
+	processedCount := 0
+	for result := range results {
 		mu.Lock()
-		grouped[key] = append(grouped[key], f)
+		grouped[result.key] = append(grouped[result.key], result.file)
 		mu.Unlock()
-
-		if i%batchSize == 0 && onProgress != nil {
-			progress := (float64(i) / float64(totalFiles)) * 100
+		
+		processedCount++
+		if processedCount%1000 == 0 && onProgress != nil {
+			progress := (float64(processedCount) / float64(totalFiles)) * 100
 			onProgress(progress)
 		}
 	}
@@ -51,7 +84,7 @@ func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress fu
 	}
 
 	// 2. Filter groups
-	var results []SimilarityGroup
+	var results2 []SimilarityGroup
 
 	totalGroups := len(grouped)
 	processedGroups := 0
@@ -80,7 +113,7 @@ func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress fu
 			continue
 		}
 
-		results = append(results, SimilarityGroup{
+		results2 = append(results2, SimilarityGroup{
 			BaseName: key,
 			Files:    group,
 		})
@@ -91,11 +124,11 @@ func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress fu
 	}
 
 	// Sort results by group size (descending) to show biggest clusters first
-	sort.Slice(results, func(i, j int) bool {
-		return len(results[i].Files) > len(results[j].Files)
+	sort.Slice(results2, func(i, j int) bool {
+		return len(results2[i].Files) > len(results2[j].Files)
 	})
 
-	return results
+	return results2
 }
 
 // generateCanonicalKey reduces a filename to its "essence" to find matches.

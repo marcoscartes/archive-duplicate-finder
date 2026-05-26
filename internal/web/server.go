@@ -803,7 +803,14 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) performFullScan(cfg *config.AppConfig) {
-	log.Printf("🔍 Starting web-triggered scan: %s", cfg.Directory)
+	var scanLogMsg string
+	if cfg.ScanFullSystem {
+		scanLogMsg = "🔍 Starting web-triggered full system scan"
+	} else {
+		scanLogMsg = fmt.Sprintf("🔍 Starting web-triggered scan: %s", cfg.Directory)
+	}
+	log.Printf(scanLogMsg)
+	
 	s.mu.Lock()
 	s.report = &reporter.Report{
 		Status: "analyzing",
@@ -812,7 +819,20 @@ func (s *Server) performFullScan(cfg *config.AppConfig) {
 	s.mu.Unlock()
 
 	startTime := time.Now()
-	files, err := scanner.ScanDirectory(cfg.Directory, cfg.Recursive)
+	
+	var files []scanner.ArchiveFile
+	var err error
+	
+	if cfg.ScanFullSystem {
+		// Scan multiple root paths
+		rootPaths := scanner.GetRootPaths()
+		log.Printf("🔍 Detected root paths: %v", rootPaths)
+		files, err = scanner.ScanMultiplePaths(rootPaths, cfg.Recursive)
+	} else {
+		// Scan single directory
+		files, err = scanner.ScanDirectory(cfg.Directory, cfg.Recursive)
+	}
+	
 	if err != nil {
 		log.Printf("❌ Scan failed: %v", err)
 		s.mu.Lock()
@@ -880,8 +900,10 @@ func (s *Server) RunStep3() {
 	s.report.Progress = 0
 	scanDir := s.scanDir
 	threshold := 70
+	scanFullSystem := false
 	if s.config != nil {
 		threshold = s.config.Threshold
+		scanFullSystem = s.config.ScanFullSystem
 	}
 	s.mu.Unlock()
 
@@ -889,7 +911,13 @@ func (s *Server) RunStep3() {
 	startTime := time.Now()
 
 	// Need scanner.ArchiveFile objects.
-	files, _ := scanner.ScanDirectory(scanDir, true)
+	var files []scanner.ArchiveFile
+	if scanFullSystem {
+		rootPaths := scanner.GetRootPaths()
+		files, _ = scanner.ScanMultiplePaths(rootPaths, true)
+	} else {
+		files, _ = scanner.ScanDirectory(scanDir, true)
+	}
 
 	onProgress := func(p float64) {
 		s.mu.Lock()
@@ -936,14 +964,22 @@ func (s *Server) RunVisual() {
 	s.report.Progress = 0
 	scanDir := s.scanDir
 	threshold := 70
+	scanFullSystem := false
 	if s.config != nil {
 		threshold = s.config.Threshold
+		scanFullSystem = s.config.ScanFullSystem
 	}
 	s.mu.Unlock()
 
 	log.Printf("🎨 Web-triggered Visual analysis started...")
 
-	files, _ := scanner.ScanDirectory(scanDir, true)
+	var files []scanner.ArchiveFile
+	if scanFullSystem {
+		rootPaths := scanner.GetRootPaths()
+		files, _ = scanner.ScanMultiplePaths(rootPaths, true)
+	} else {
+		files, _ = scanner.ScanDirectory(scanDir, true)
+	}
 
 	hashDone := make(chan bool)
 	go func() {
