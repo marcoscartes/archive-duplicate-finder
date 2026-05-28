@@ -39,6 +39,34 @@
 
 ## 🛠️ Installation
 
+### Prerequisites
+
+**Go Backend:**
+- Go 1.21 or higher
+
+**Node.js Frontend:**
+- Node.js 16+ (for building the web dashboard)
+- npm or yarn
+
+**Optional - Fast Indexing:**
+For faster full-system scans, install one of these (auto-detected):
+
+- **Windows:** [Everything](https://www.voidtools.com/) - Ultra-fast file search
+- **macOS:** Spotlight (built-in via `mdfind`)
+- **Linux:** `locate` package
+  ```bash
+  # Ubuntu/Debian
+  sudo apt-get install locate
+  
+  # macOS (Homebrew)
+  brew install findutils
+  
+  # Fedora/RHEL
+  sudo dnf install findutils
+  ```
+
+### Build from Source
+
 ```bash
 # Clone the repository
 git clone https://github.com/marcoscartes/archive-duplicate-finder.git
@@ -46,7 +74,7 @@ git clone https://github.com/marcoscartes/archive-duplicate-finder.git
 # Navigate to the project
 cd archive-duplicate-finder
 
-# Install dependencies and build
+# Install Go dependencies and build backend
 go build -o archive-finder ./cmd/finder
 
 # Build the dashboard (Requires Node.js)
@@ -55,6 +83,14 @@ npm install
 npm run build
 cd ..
 ```
+
+### Using Pre-built Binaries
+
+Download from [GitHub Releases](https://github.com/marcoscartes/archive-duplicate-finder/releases):
+- `archive-finder-windows-amd64.exe` - Windows 64-bit
+- `archive-finder-linux-amd64` - Linux 64-bit
+- `archive-finder-darwin-amd64` - macOS Intel
+- `archive-finder-darwin-arm64` - macOS Apple Silicon
 
 ---
 
@@ -102,6 +138,31 @@ The tool retains full backward compatibility for automation:
 
 ---
 
+## ⚡ Full System Scanning
+
+### Fast Indexing (Auto-Detected)
+
+When you use the **Full PC Scan** mode, the application automatically detects and uses native OS indexing:
+
+| Platform | Database | Speed | Status |
+|----------|----------|-------|--------|
+| Windows | Everything | ⚡⚡⚡ Seconds | Auto-detected if installed |
+| macOS | Spotlight (mdfind) | ⚡⚡ Seconds | Built-in, requires indexing enabled |
+| Linux | locate | ⚡⚡ Seconds | Requires `updatedb` to be current |
+| Any | Directory Scan | ⏱️ Minutes | Fallback if database unavailable |
+
+**Enable Full PC Scan:**
+- **Web UI:** Toggle "Full PC Scan" checkbox in setup
+- **CLI:** `./archive-finder --full-system`
+
+The tool will log which indexing method was used:
+```
+⚡ Everything database detected - using fast indexed search...
+✅ Found 1,234 files using Everything
+```
+
+---
+
 ## 🤝 Acknowledgement
 
 This software was built and refined with the assistance of **Antigravity**, an AI agent specialized in advanced coding tasks. Antigravity helped implement:
@@ -116,6 +177,7 @@ This software was built and refined with the assistance of **Antigravity**, an A
 - **UI Consistency:** Unified centered 1000px layout and intelligent thumbnails throughout the dashboard.
 - PDF reporting modules.
 - Multi-volume archive detection logic.
+- **Full System Scanning:** Cross-platform implementation with Everything (Windows), Spotlight/mdfind (macOS), and locate (Linux).
 
 ---
 
