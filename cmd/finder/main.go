@@ -77,13 +77,18 @@ func main() {
 	}
 
 	// If no flags but we HAVE a saved config, load it into flagConfig and start web
-	if visitCount == 0 && appConfig.Directory != "" {
-		log.Printf("📂 Loading saved configuration: %s", appConfig.Directory)
+	if visitCount == 0 && (appConfig.Directory != "" || appConfig.ScanFullSystem) {
+		if appConfig.ScanFullSystem {
+			log.Printf("📂 Loading saved configuration: Full System Scan")
+		} else {
+			log.Printf("📂 Loading saved configuration: %s", appConfig.Directory)
+		}
 		flagConfig.Directory = appConfig.Directory
 		flagConfig.TrashPath = appConfig.TrashPath
 		flagConfig.Threshold = appConfig.Threshold
 		flagConfig.Recursive = appConfig.Recursive
 		flagConfig.LeaveRef = appConfig.LeaveRef
+		flagConfig.FullSystem = appConfig.ScanFullSystem // Copy full system flag!
 		flagConfig.Web = true // Default to web if launched without args
 	}
 

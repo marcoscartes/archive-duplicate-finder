@@ -114,7 +114,14 @@ function SetupView({ onStart, isLoading }: { onStart: (config: AppConfig) => voi
             <div className="flex items-center justify-between ml-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Scan Mode</label>
               <label className="flex items-center gap-2 cursor-pointer group">
-                <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${config.scan_full_system ? 'bg-purple-600 border-purple-600 shadow-lg shadow-purple-500/20' : 'border-glass-border group-hover:border-purple-500/40'}`} onClick={() => setConfig({ ...config, scan_full_system: !config.scan_full_system })}>
+                <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${config.scan_full_system ? 'bg-purple-600 border-purple-600 shadow-lg shadow-purple-500/20' : 'border-glass-border group-hover:border-purple-500/40'}`} onClick={() => {
+                  const newFullSystem = !config.scan_full_system
+                  setConfig({ 
+                    ...config, 
+                    scan_full_system: newFullSystem,
+                    directory: newFullSystem ? '' : config.directory
+                  })
+                }}>
                   {config.scan_full_system && <CheckCircle2 className="w-3 h-3 text-white" />}
                 </div>
                 <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400">Full PC Scan</span>
