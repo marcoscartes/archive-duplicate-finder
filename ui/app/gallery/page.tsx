@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
     Search,
@@ -24,7 +24,9 @@ import {
     Clock,
     Filter,
     ArrowDownWideNarrow,
-    Play
+    Play,
+    List,
+    FolderOpen
 } from 'lucide-react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -45,12 +47,37 @@ interface GalleryResponse {
     total: number
 }
 
+// Normalizes text for forgiving search: lowercase, strips accents/diacritics,
+// and collapses separators (_ - . spaces) into a single space so that
+// "mi archivo", "mi_archivo" and "mi-archivo" all match each other.
+function normalizeForSearch(value: string): string {
+    return value
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '') // remove diacritics
+        .replace(/[_\-.\s]+/g, ' ')
+        .trim()
+}
+
 function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B'
     const k = 1024
     const sizes = ['B', 'KB', 'MB', 'GB']
     const i = Math.floor(Math.log(bytes) / Math.log(k))
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+function formatDate(value: string): string {
+    if (!value) return '—'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+    return date.toLocaleString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    })
 }
 
 function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, index: number, onRefresh?: () => void, onSelect: (index: number) => void }) {
@@ -150,6 +177,12 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
         e.stopPropagation()
         const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
         fetch(`${apiHost}/api/open?path=${encodeURIComponent(file.path)}&mode=${mode}`)
+            .then(res => {
+                if (!res.ok) {
+                    console.error(`Failed to ${mode} file: ${res.status}`)
+                    // Silently fail - user won't see error but won't be confused by console errors
+                }
+            })
             .catch(err => console.error(`Failed to ${mode} file:`, err))
     }
 
@@ -183,7 +216,7 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
     return (
         <div
             ref={itemRef}
-            className="relative group bg-glass-layer rounded-2xl overflow-hidden border border-glass-border hover:border-blue-500/30 transition-all w-full h-full cursor-pointer"
+            className="relative group bg-[#121318] overflow-hidden border border-[#4b5563] hover:border-[#9ca3af] hover:shadow-[0_8px_24px_rgba(0,0,0,0.35)] transition-all w-full h-full cursor-pointer"
             onClick={handleImageClick}
         >
             {loading && (
@@ -205,7 +238,7 @@ function GalleryItem({ file, index, onRefresh, onSelect }: { file: FileInfo, ind
                         <img
                             src={previewData.url}
                             alt={file.name}
-                            className="w-full h-full object-contain"
+                            className="w-full h-full object-cover"
                         />
                     ) : previewData.type === 'video' ? (
                         <div className="relative w-full h-full overflow-hidden bg-black">
@@ -570,31 +603,20 @@ function GlobalViewer({ files, selectedIndex, onClose, onPrev, onNext }: { files
 
 export default function GalleryPage() {
     const [files, setFiles] = useState<FileInfo[]>([])
-    const [filteredFiles, setFilteredFiles] = useState<FileInfo[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
-    const [gridHeight, setGridHeight] = useState(0)
+    // Deferred query keeps the input responsive: typing updates instantly while
+    // the (heavier) filtering over 100k+ files runs at a lower priority.
+    const deferredQuery = useDeferredValue(searchQuery)
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
     const [sortField, setSortField] = useState<'name' | 'size' | 'mod_time'>('mod_time')
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
     const [filterExt, setFilterExt] = useState<'all' | 'zip' | 'rar' | '7z' | 'stl' | 'obj'>('all')
+    const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+    const [archiveCounts, setArchiveCounts] = useState<Record<string, number>>({})
     const [page, setPage] = useState(1)
     const PAGE_SIZE = 60
-
-    // Calculate grid height to fit exactly 3 rows
-    useEffect(() => {
-        const calculateGridHeight = () => {
-            const headerHeight = 200 // Approximate header + search bar height
-            const availableHeight = window.innerHeight - headerHeight - 64 // 64px for padding
-            const rowHeight = availableHeight / 3
-            setGridHeight(rowHeight)
-        }
-
-        calculateGridHeight()
-        window.addEventListener('resize', calculateGridHeight)
-        return () => window.removeEventListener('resize', calculateGridHeight)
-    }, [])
 
     const fetchFiles = useCallback(async () => {
         try {
@@ -604,7 +626,6 @@ export default function GalleryPage() {
 
             const data: GalleryResponse = await response.json()
             setFiles(data.files)
-            setFilteredFiles(data.files)
             setLoading(false)
         } catch (err) {
             console.error("❌ Fetch error:", err)
@@ -617,30 +638,39 @@ export default function GalleryPage() {
         fetchFiles()
     }, [fetchFiles])
 
-    // Filter and Sort files
-    useEffect(() => {
-        let result = [...files]
+    // Precompute the normalized search text for every file ONCE (when the file
+    // list changes) instead of re-normalizing 100k+ strings on every keystroke.
+    const searchIndex = useMemo(
+        () => files.map(file => normalizeForSearch(`${file.name} ${file.path}`)),
+        [files]
+    )
 
-        // 1. Filter by Search Query
-        if (searchQuery.trim() !== '') {
-            const query = searchQuery.toLowerCase()
-            result = result.filter(file =>
-                file.name.toLowerCase().includes(query) ||
-                file.path.toLowerCase().includes(query)
-            )
+    // Filter and sort, memoized so it only recomputes when an input actually
+    // changes — and uses the deferred query so typing stays smooth.
+    const filteredFiles = useMemo(() => {
+        const tokens = normalizeForSearch(deferredQuery).split(' ').filter(Boolean)
+
+        let result = files
+        if (tokens.length > 0 || filterExt !== 'all') {
+            result = files.filter((file, i) => {
+                // Search: every token must appear in the precomputed index entry.
+                if (tokens.length > 0) {
+                    const target = searchIndex[i]
+                    if (!tokens.every(token => target.includes(token))) return false
+                }
+                // Extension filter.
+                if (filterExt !== 'all' && !file.name.toLowerCase().endsWith('.' + filterExt)) {
+                    return false
+                }
+                return true
+            })
         }
 
-        // 2. Filter by Extension
-        if (filterExt !== 'all') {
-            result = result.filter(file =>
-                file.name.toLowerCase().endsWith('.' + filterExt)
-            )
-        }
-
-        // 3. Sort
-        result.sort((a, b) => {
-            let valA = a[sortField]
-            let valB = b[sortField]
+        // Sort a shallow copy (never mutate `files`).
+        const sorted = [...result]
+        sorted.sort((a, b) => {
+            let valA: string | number = a[sortField] as string
+            let valB: string | number = b[sortField] as string
 
             if (sortField === 'name') {
                 valA = (valA as string).toLowerCase()
@@ -654,10 +684,43 @@ export default function GalleryPage() {
             if (valA > valB) return sortOrder === 'asc' ? 1 : -1
             return 0
         })
+        return sorted
+    }, [files, searchIndex, deferredQuery, filterExt, sortField, sortOrder])
 
-        setFilteredFiles(result)
-        setPage(1) // Reset to first page when filters change
-    }, [searchQuery, filterExt, sortField, sortOrder, files])
+    // Reset to first page whenever the effective filters change.
+    useEffect(() => {
+        setPage(1)
+    }, [deferredQuery, filterExt, sortField, sortOrder])
+
+    // In list view, fetch the internal file counts for the visible archives.
+    useEffect(() => {
+        if (viewMode !== 'list') return
+
+        // Only for the archives currently rendered (avoids thousands of requests).
+        const archiveFiles = filteredFiles
+            .slice(0, page * PAGE_SIZE)
+            .filter(file => /\.(zip|rar|7z)$/i.test(file.path))
+        if (archiveFiles.length === 0) {
+            setArchiveCounts({})
+            return
+        }
+
+        const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+        const promises = archiveFiles.map(file =>
+            fetch(`${apiHost}/api/list-previews?path=${encodeURIComponent(file.path)}`)
+                .then(res => res.json())
+                .then(data => ({ path: file.path, count: data.previews?.length || 0 }))
+                .catch(() => ({ path: file.path, count: 0 }))
+        )
+
+        Promise.all(promises).then(results => {
+            const nextCounts: Record<string, number> = {}
+            results.forEach(result => {
+                nextCounts[result.path] = result.count
+            })
+            setArchiveCounts(nextCounts)
+        })
+    }, [filteredFiles, viewMode, page])
 
     const handlePrev = () => {
         if (selectedIndex === null) return
@@ -709,7 +772,7 @@ export default function GalleryPage() {
 
     return (
         <div className="min-h-screen bg-background text-foreground p-4 md:p-8">
-            <div className="max-w-[1000px] mx-auto">
+            <div className="max-w-[1400px] mx-auto">
                 <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
                     <div className="flex items-center gap-4">
                         <Link href="/">
@@ -732,7 +795,7 @@ export default function GalleryPage() {
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-blue-500 transition-colors" />
                         <input
                             type="text"
-                            placeholder="Search files by name..."
+                            placeholder="Search by name or path — multiple words match in any order..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             className="w-full bg-glass-layer border border-glass-border rounded-2xl py-4 pl-12 pr-4 text-sm font-medium focus:outline-none focus:border-blue-500/50 focus:bg-glass-layer transition-all"
@@ -752,8 +815,8 @@ export default function GalleryPage() {
                     </div>
                 </div>
 
-                <div className="flex items-center justify-between mb-8 px-2">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between mb-8 px-2 gap-4">
+                    <div className="flex flex-wrap items-center gap-2">
                         <ArrowDownWideNarrow className="w-4 h-4 text-gray-500" />
                         <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Sort by:</span>
                         <div className="flex gap-2 ml-2">
@@ -781,27 +844,117 @@ export default function GalleryPage() {
                         </div>
                     </div>
 
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setViewMode('grid')}
+                            className={`px-3 py-2 rounded-lg border transition-all ${viewMode === 'grid' ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'border-glass-border text-gray-500 hover:bg-glass-layer'}`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <Grid3x3 className="w-4 h-4" />
+                                <span className="text-[10px] font-bold uppercase tracking-tighter">Grid</span>
+                            </div>
+                        </button>
+                        <button
+                            onClick={() => setViewMode('list')}
+                            className={`px-3 py-2 rounded-lg border transition-all ${viewMode === 'list' ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'border-glass-border text-gray-500 hover:bg-glass-layer'}`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <List className="w-4 h-4" />
+                                <span className="text-[10px] font-bold uppercase tracking-tighter">List</span>
+                            </div>
+                        </button>
+                    </div>
+
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                         Showing <span className="text-foreground">{filteredFiles.length}</span> / {files.length} archives
                     </div>
                 </div>
 
-                <div
-                    className="grid grid-cols-3 gap-6"
-                    style={{
-                        gridAutoRows: gridHeight > 0 ? `${gridHeight - 32}px` : 'auto'
-                    }}
-                >
-                    {filteredFiles.slice(0, page * PAGE_SIZE).map((file, idx) => (
-                        <GalleryItem
-                            key={file.path}
-                            file={file}
-                            index={idx}
-                            onRefresh={fetchFiles}
-                            onSelect={setSelectedIndex}
-                        />
-                    ))}
-                </div>
+                {viewMode === 'grid' ? (
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(250px,1fr))] gap-[5px] justify-items-center">
+                        {filteredFiles.slice(0, page * PAGE_SIZE).map((file, idx) => (
+                            <div key={file.path} className="w-[250px] h-[300px]">
+                                <GalleryItem
+                                    file={file}
+                                    index={idx}
+                                    onRefresh={fetchFiles}
+                                    onSelect={setSelectedIndex}
+                                />
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="overflow-hidden border border-[#4b5563] bg-[#121318] rounded-none">
+                        <div className="grid grid-cols-[56px_minmax(180px,1.8fr)_minmax(220px,2.2fr)_100px_170px_80px_96px] gap-3 px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500 border-b border-[#4b5563] bg-[#0f1116]">
+                            <span className="self-center">Preview</span>
+                            <span className="self-center">Name</span>
+                            <span className="self-center">Path</span>
+                            <span className="self-center">Size</span>
+                            <span className="self-center">Date</span>
+                            <span className="self-center">Files</span>
+                            <span className="self-center">Actions</span>
+                        </div>
+                        <div className="divide-y divide-[#4b5563]">
+                            {filteredFiles.slice(0, page * PAGE_SIZE).map((file, idx) => {
+                                const isArchive = /\.(zip|rar|7z)$/i.test(file.path)
+                                const count = isArchive ? (archiveCounts[file.path] ?? '—') : 1
+                                const ext = (file.type || file.name.split('.').pop() || 'file').toUpperCase()
+                                const isVideo = file.path.toLowerCase().match(/\.(mp4|webm|mkv|mov|avi)$/)
+                                const isModel = /\.(stl|obj)$/i.test(file.path)
+
+                                const handleOpenAction = (e: React.MouseEvent, mode: 'launch' | 'reveal') => {
+                                    e.stopPropagation()
+                                    const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
+                                    fetch(`${apiHost}/api/open?path=${encodeURIComponent(file.path)}&mode=${mode}`)
+                                }
+
+                                return (
+                                    <button
+                                        key={file.path}
+                                        onClick={() => setSelectedIndex(idx)}
+                                        className="w-full grid grid-cols-[56px_minmax(180px,1.8fr)_minmax(220px,2.2fr)_100px_170px_80px_96px] gap-3 px-4 py-3 text-left transition-all hover:bg-[#1a1d24]"
+                                    >
+                                        <div className="flex items-center justify-center w-14 h-12 rounded border border-[#4b5563] bg-[#0f1116] overflow-hidden shrink-0">
+                                            {isVideo ? (
+                                                <Play className="w-5 h-5 text-blue-400" />
+                                            ) : isModel ? (
+                                                <Box className="w-5 h-5 text-cyan-400" />
+                                            ) : (
+                                                <ImageIcon className="w-5 h-5 text-gray-400" />
+                                            )}
+                                        </div>
+                                        <div className="min-w-0 flex flex-col justify-center">
+                                            <p className="text-sm font-semibold text-white truncate">{file.name}</p>
+                                            <p className="text-[10px] text-gray-500 uppercase tracking-[0.25em] mt-1">{ext}</p>
+                                        </div>
+                                        <div className="min-w-0 text-left flex items-center">
+                                            <p className="text-sm text-gray-300 truncate">{file.path}</p>
+                                        </div>
+                                        <div className="flex items-center text-sm text-gray-300">{formatBytes(file.size)}</div>
+                                        <div className="flex items-center text-sm text-gray-300">{formatDate(file.mod_time)}</div>
+                                        <div className="flex items-center text-sm text-gray-300">{count}</div>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={(e) => handleOpenAction(e, 'launch')}
+                                                className="p-2 rounded border border-[#4b5563] bg-[#0f1116] text-gray-300 hover:text-white hover:border-blue-500/50 transition-all"
+                                                title="Open file"
+                                            >
+                                                <ExternalLink className="w-4 h-4" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => handleOpenAction(e, 'reveal')}
+                                                className="p-2 rounded border border-[#4b5563] bg-[#0f1116] text-gray-300 hover:text-white hover:border-blue-500/50 transition-all"
+                                                title="Open folder"
+                                            >
+                                                <FolderOpen className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </button>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )}
 
                 {filteredFiles.length > page * PAGE_SIZE && (
                     <div className="mt-12 mb-20 flex justify-center">

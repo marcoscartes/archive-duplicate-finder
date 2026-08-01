@@ -28,17 +28,20 @@ func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress fu
 	var mu sync.Mutex
 
 	totalFiles := len(files)
-	
+
 	// Parallel grouping using worker pool
 	numWorkers := 8
 	if totalFiles < 1000 {
 		numWorkers = 2
 	}
-	
+
 	jobs := make(chan scanner.ArchiveFile, len(files))
-	results := make(chan struct{key string; file scanner.ArchiveFile}, len(files))
+	results := make(chan struct {
+		key  string
+		file scanner.ArchiveFile
+	}, len(files))
 	var wg sync.WaitGroup
-	
+
 	// Workers to generate keys in parallel
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
@@ -46,17 +49,20 @@ func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress fu
 			defer wg.Done()
 			for f := range jobs {
 				key := generateCanonicalKey(f.Name)
-				results <- struct{key string; file scanner.ArchiveFile}{key, f}
+				results <- struct {
+					key  string
+					file scanner.ArchiveFile
+				}{key, f}
 			}
 		}()
 	}
-	
+
 	// Collector goroutine
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
-	
+
 	// Send jobs
 	go func() {
 		for _, f := range files {
@@ -64,14 +70,14 @@ func FindSimilarGroups(files []scanner.ArchiveFile, _ int, _ bool, onProgress fu
 		}
 		close(jobs)
 	}()
-	
+
 	// Collect results and group
 	processedCount := 0
 	for result := range results {
 		mu.Lock()
 		grouped[result.key] = append(grouped[result.key], result.file)
 		mu.Unlock()
-		
+
 		processedCount++
 		if processedCount%1000 == 0 && onProgress != nil {
 			progress := (float64(processedCount) / float64(totalFiles)) * 100

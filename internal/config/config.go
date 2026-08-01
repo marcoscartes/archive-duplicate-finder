@@ -4,7 +4,30 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+const configFileName = "archive-finder-settings.json"
+
+// isGoBuildTemp reports whether dir is the throwaway directory that `go run`
+// compiles into. Config written there is wiped when the process exits, so we
+// must never treat it as a persistent location.
+func isGoBuildTemp(dir string) bool {
+	return strings.Contains(filepath.ToSlash(dir), "/go-build")
+}
+
+// isWritableDir checks that we can actually create a file in dir. This catches
+// read-only install locations (e.g. Program Files) before we commit to them.
+func isWritableDir(dir string) bool {
+	testFile := filepath.Join(dir, ".aff-write-test")
+	f, err := os.OpenFile(testFile, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(testFile)
+	return true
+}
 
 type AppConfig struct {
 	Directory     string  `json:"directory"`
@@ -19,11 +42,27 @@ type AppConfig struct {
 }
 
 func GetConfigPath() string {
+	// Preferred location: next to the executable, so the app stays portable
+	// (e.g. running from a USB drive keeps its settings with it).
 	exePath, err := os.Executable()
-	if err != nil {
-		return "archive-finder-settings.json"
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		if !isGoBuildTemp(exeDir) && isWritableDir(exeDir) {
+			return filepath.Join(exeDir, configFileName)
+		}
 	}
-	return filepath.Join(filepath.Dir(exePath), "archive-finder-settings.json")
+
+	// Fallback: a stable per-user config directory. Used when running via
+	// `go run` (temp dir) or when the executable lives in a read-only folder.
+	if cfgDir, err := os.UserConfigDir(); err == nil {
+		dir := filepath.Join(cfgDir, "archive-finder")
+		if os.MkdirAll(dir, 0755) == nil {
+			return filepath.Join(dir, configFileName)
+		}
+	}
+
+	// Last resort: the current working directory.
+	return configFileName
 }
 
 func GetBaseCacheDir() string {

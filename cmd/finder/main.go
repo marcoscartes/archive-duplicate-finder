@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"archive-duplicate-finder/internal/archive"
 	"archive-duplicate-finder/internal/config"
 	"archive-duplicate-finder/internal/db"
 	"archive-duplicate-finder/internal/reporter"
@@ -46,11 +47,16 @@ type Config struct {
 	Version     bool   // Show version and exit
 	Info        bool   // Show author and info and exit
 	FullSystem  bool   // Scan full system instead of single directory
+	Recompress  string // Path to a file to recompress into a ZIP archive
+	OutFile     string // Output archive path for recompression
+	Compare     bool   // Compare ZIP/7Z/RAR compression results for the same input
 }
 
 func main() {
 	// 1. Load Persistent Config
 	appConfig, _ := config.LoadConfig()
+	// Log the resolved config path to help with diagnostics when the file is missing
+	log.Printf("🔎 Config path resolved to: %s", config.GetConfigPath())
 
 	// 2. Parse command line flags (can override appConfig)
 	flagConfig := parseFlags()
@@ -68,8 +74,64 @@ func main() {
 		}
 	})
 
-	// If no flags at all and no saved directory, we MUST start in web setup mode
-	if visitCount == 0 && appConfig.Directory == "" {
+	if flagConfig.Recompress != "" {
+		recommendation := archive.RecommendCompression(flagConfig.Recompress)
+		fmt.Println("📦 Compression recommendation:")
+		fmt.Println(recommendation)
+
+		beforeInfo, err := os.Stat(flagConfig.Recompress)
+		if err != nil {
+			log.Fatalf("❌ Failed to stat input file: %v", err)
+		}
+
+		if flagConfig.Compare {
+			results, err := archive.CompareArchiveRecompression(flagConfig.Recompress, flagConfig.OutFile)
+			if err != nil {
+				log.Fatalf("❌ Failed to compare compression formats: %v", err)
+			}
+			fmt.Println("📊 Comparison results:")
+			for _, result := range results {
+				if result.Err != nil {
+					fmt.Printf("- %s: failed (%v)\n", strings.ToUpper(result.Format), result.Err)
+				} else {
+					fmt.Printf("- %s: %d bytes -> %s\n", strings.ToUpper(result.Format), result.Size, result.Path)
+				}
+			}
+			return
+		}
+
+		outputPath := flagConfig.OutFile
+		if outputPath == "" {
+			outputPath = strings.TrimSuffix(flagConfig.Recompress, filepath.Ext(flagConfig.Recompress)) + "_recompressed.zip"
+		}
+
+		var createdPath string
+		var recompressErr error
+		if strings.EqualFold(filepath.Ext(flagConfig.Recompress), ".zip") || strings.EqualFold(filepath.Ext(flagConfig.Recompress), ".rar") || strings.EqualFold(filepath.Ext(flagConfig.Recompress), ".7z") {
+			createdPath, recompressErr = archive.RecompressArchive(flagConfig.Recompress, outputPath)
+		} else {
+			createdPath, recompressErr = archive.RecompressFile(flagConfig.Recompress, outputPath)
+		}
+		if recompressErr != nil {
+			log.Fatalf("❌ Failed to recompress file: %v", recompressErr)
+		}
+
+		afterInfo, err := os.Stat(createdPath)
+		if err != nil {
+			log.Fatalf("❌ Failed to stat output archive: %v", err)
+		}
+
+		fmt.Printf("📏 Original size: %d bytes\n", beforeInfo.Size())
+		fmt.Printf("📏 Recompressed size: %d bytes\n", afterInfo.Size())
+		fmt.Printf("📉 Difference: %d bytes\n", afterInfo.Size()-beforeInfo.Size())
+		fmt.Printf("✅ Recompressed archive created at %s\n", createdPath)
+		return
+	}
+
+	// If no flags at all and no saved directory (and not a full-system scan), we
+	// MUST start in web setup mode. Full-system scans have no directory by design,
+	// so we must not treat an empty Directory as "unconfigured" in that case.
+	if visitCount == 0 && appConfig.Directory == "" && !appConfig.ScanFullSystem {
 		log.Println("🌐 No configuration found. Starting web setup mode...")
 		startWebServer(flagConfig, nil, nil, nil, appConfig, nil, nil)
 		// Block indefinitely
@@ -435,6 +497,9 @@ func parseFlags() Config {
 	flag.BoolVar(&config.Debug, "debug", false, "Enable detailed debug logging for troubleshooting")
 	flag.BoolVar(&config.RunStep3, "check-similar", false, "Explicitly run Step 3 (Similarity Check). Default is on-demand.")
 	flag.BoolVar(&config.FullSystem, "full-system", false, "Scan entire system instead of a single directory")
+	flag.StringVar(&config.Recompress, "recompress", "", "Recompress a single STL/OBJ/JPG file or compare ZIP/RAR/7Z archive formats")
+	flag.StringVar(&config.OutFile, "out", "", "Output archive path or directory for --recompress")
+	flag.BoolVar(&config.Compare, "compare", false, "Compare ZIP/7Z/RAR results for the same input archive")
 	flag.BoolVar(&config.Version, "version", false, "Show version information and exit")
 	flag.BoolVar(&config.Info, "info", false, "Show project information, author and license")
 

@@ -1,8 +1,8 @@
 "use client"
 
 import { Canvas, useLoader, useFrame } from '@react-three/fiber'
-import { OrbitControls, Stage, Float, MeshDistortMaterial, Sphere, Center, Text, Html } from '@react-three/drei'
-import { useRef, Suspense, useState, useEffect, useMemo } from 'react'
+import { OrbitControls, Stage, Float, MeshDistortMaterial, Sphere, Html } from '@react-three/drei'
+import { useRef, Suspense, useState, useEffect } from 'react'
 import * as THREE from 'three'
 import { STLLoader, OBJLoader } from 'three-stdlib'
 import { Maximize2, Minimize2 } from 'lucide-react'
@@ -69,11 +69,18 @@ function ModelViewer({ url, path, color, position }: { url: string, path: string
                 box.getSize(size);
                 const maxDim = Math.max(size.x, size.y, size.z);
                 if (maxDim > 0) {
-                    setScale(3 / maxDim);
+                    const nextScale = 3 / maxDim;
+                    if (Math.abs(nextScale - scale) > 1e-6) {
+                        queueMicrotask(() => {
+                            setScale(nextScale);
+                        });
+                    }
                 }
             }
             geom.computeVertexNormals();
-            setGeometry(geom);
+            queueMicrotask(() => {
+                setGeometry(geom);
+            });
         }
     }, [loaded, isObj]);
 

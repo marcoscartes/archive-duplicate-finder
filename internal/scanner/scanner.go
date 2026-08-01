@@ -7,10 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"runtime"
 )
 
 // ArchiveFile represents a compressed archive file
@@ -142,32 +143,56 @@ func isSystemFolder(path string) bool {
 // ScanDirectory scans a directory for archive files
 func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 	var files []ArchiveFile
-	
+
+	// Progress counters (updated concurrently, read by the ticker below).
+	var dirsDiscovered, dirsProcessed, filesFound int64
+
+	// Background heartbeat so long full-system scans aren't silent.
+	progressDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-progressDone:
+				return
+			case <-ticker.C:
+				log.Printf("   ⏳ [%s] dirs found: %d | scanned: %d | matches: %d",
+					dir,
+					atomic.LoadInt64(&dirsDiscovered),
+					atomic.LoadInt64(&dirsProcessed),
+					atomic.LoadInt64(&filesFound))
+			}
+		}
+	}()
+	defer close(progressDone)
+
 	// First pass: collect all directory paths to scan
 	var dirsToScan []string
 	dirsToScan = append(dirsToScan, dir)
-	
+
 	for i := 0; i < len(dirsToScan); i++ {
 		dirPath := dirsToScan[i]
 		entries, err := os.ReadDir(dirPath)
 		if err != nil {
 			continue
 		}
-		
+
 		for _, entry := range entries {
 			if entry.IsDir() && !isSystemFolder(filepath.Join(dirPath, entry.Name())) && recursive {
 				dirsToScan = append(dirsToScan, filepath.Join(dirPath, entry.Name()))
 			}
 		}
+		atomic.StoreInt64(&dirsDiscovered, int64(len(dirsToScan)))
 	}
 
 	// Second pass: parallelize file scanning across all directories
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	
+
 	// Create a channel for directories to scan with buffering
 	scanChan := make(chan string, len(dirsToScan))
-	
+
 	// Number of parallel workers - higher for I/O bound operations
 	numWorkers := 24
 
@@ -175,6 +200,7 @@ func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 	worker := func() {
 		defer wg.Done()
 		for dirPath := range scanChan {
+			atomic.AddInt64(&dirsProcessed, 1)
 			entries, err := os.ReadDir(dirPath)
 			if err != nil {
 				continue
@@ -182,7 +208,7 @@ func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 
 			// Local buffer to reduce lock contention
 			localFiles := []ArchiveFile{}
-			
+
 			for _, entry := range entries {
 				if entry.IsDir() {
 					continue
@@ -191,20 +217,20 @@ func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 				fullPath := filepath.Join(dirPath, entry.Name())
 				ext := strings.ToLower(filepath.Ext(fullPath))
 				var fileType string
-				
+
 				switch {
 				case ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || ext == ".gz" || ext == ".bz2" || ext == ".xz" || ext == ".iso" || ext == ".cab":
 					fileType = "archive"
 				case ext == ".stl" || ext == ".obj" || ext == ".3ds" || ext == ".fbx" || ext == ".blend" || ext == ".step" || ext == ".stp" || ext == ".iges" || ext == ".igs" || ext == ".ply" || ext == ".off" || ext == ".3mf" || ext == ".glb" || ext == ".gltf":
 					fileType = "model"
 				}
-				
+
 				if fileType != "" {
 					info, err := entry.Info()
 					if err != nil {
 						continue
 					}
-					
+
 					localFiles = append(localFiles, ArchiveFile{
 						Name:    entry.Name(),
 						Path:    fullPath,
@@ -214,9 +240,10 @@ func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 					})
 				}
 			}
-			
+
 			// Append local results to global slice once
 			if len(localFiles) > 0 {
+				atomic.AddInt64(&filesFound, int64(len(localFiles)))
 				mu.Lock()
 				files = append(files, localFiles...)
 				mu.Unlock()
@@ -238,7 +265,7 @@ func ScanDirectory(dir string, recursive bool) ([]ArchiveFile, error) {
 
 	// Wait for all workers to complete
 	wg.Wait()
-	
+
 	return files, nil
 }
 
@@ -310,79 +337,53 @@ func formatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-// GetRootPaths returns the root directories to scan based on the operating system
+// GetRootPaths returns a list of root paths to scan for full-system scans.
 func GetRootPaths() []string {
-	var roots []string
-	osType := os.Getenv("GOOS")
-	if osType == "" {
-		// Use runtime.GOOS if environment variable is not set
-		osType = os.Getenv("GOOS")
-		if osType == "" {
-			// Fallback: detect OS
-			switch runtime.GOOS {
-			case "windows":
-				osType = "windows"
-			case "darwin":
-				osType = "darwin"
-			default:
-				osType = "linux"
+	if runtime.GOOS == "windows" {
+		var roots []string
+		for c := 'C'; c <= 'Z'; c++ {
+			p := fmt.Sprintf("%c:\\", c)
+			if _, err := os.Stat(p); err == nil {
+				roots = append(roots, p)
 			}
 		}
-	}
-
-	switch runtime.GOOS {
-	case "windows":
-		// Get all drive letters on Windows
-		for i := 'A'; i <= 'Z'; i++ {
-			drive := string(i) + ":"
-			_, err := os.Stat(drive)
-			if err == nil {
-				roots = append(roots, drive)
-			}
+		if len(roots) == 0 {
+			roots = append(roots, "C:\\")
 		}
-	case "darwin":
-		// On macOS, scan /Users and /Volumes for mounted volumes
-		roots = append(roots, "/Users")
-		roots = append(roots, "/Volumes")
-	case "linux":
-		// On Linux, start from home directory and /mnt for mounted volumes
-		home, err := os.UserHomeDir()
-		if err == nil {
-			roots = append(roots, home)
-		}
-		roots = append(roots, "/mnt")
-		roots = append(roots, "/media")
-	default:
-		// Fallback to current directory
-		roots = append(roots, ".")
+		return roots
 	}
-
-	return roots
+	return []string{"/"}
 }
 
-// ScanMultiplePaths scans multiple root paths for archive and model files
+// ScanMultiplePaths scans multiple root paths and aggregates results.
+// It first tries the OS-specific indexed database (Everything on Windows,
+// Spotlight on macOS, locate on Linux) which returns in seconds. If that is
+// unavailable or fails, it falls back to a manual directory walk (with progress).
 func ScanMultiplePaths(paths []string, recursive bool) ([]ArchiveFile, error) {
-	// Try to use OS-specific indexed databases first
 	switch runtime.GOOS {
 	case "windows":
 		if IsEverythingAvailable() {
 			log.Println("⚡ Everything database detected - using fast indexed search...")
+			start := time.Now()
 			files, err := ScanWithEverything()
 			if err == nil && len(files) > 0 {
-				log.Printf("✅ Found %d files using Everything", len(files))
+				log.Printf("✅ Found %d files using Everything in %s", len(files), time.Since(start).Round(time.Millisecond))
 				return files, nil
 			}
 			if err != nil {
 				log.Printf("⚠️ Everything search failed, falling back to directory scan: %v", err)
 			}
+		} else {
+			log.Println("ℹ️  Everything CLI (es.exe) not found — using manual walk. Install 'es.exe' from voidtools into C:\\Program Files\\Everything\\ or your PATH for fast indexed scans.")
 		}
 
 	case "darwin":
 		if IsMdfindAvailable() {
 			log.Println("⚡ Spotlight database detected - using fast indexed search...")
+			start := time.Now()
 			files, err := ScanWithMdfind()
 			if err == nil && len(files) > 0 {
-				log.Printf("✅ Found %d files using Spotlight", len(files))
+				log.Printf("✅ Found %d files using Spotlight in %s", len(files), time.Since(start).Round(time.Millisecond))
 				return files, nil
 			}
 			if err != nil {
@@ -393,9 +394,10 @@ func ScanMultiplePaths(paths []string, recursive bool) ([]ArchiveFile, error) {
 	case "linux":
 		if IsLocateAvailable() {
 			log.Println("⚡ Locate database detected - using fast indexed search...")
+			start := time.Now()
 			files, err := ScanWithLocate()
 			if err == nil && len(files) > 0 {
-				log.Printf("✅ Found %d files using locate", len(files))
+				log.Printf("✅ Found %d files using locate in %s", len(files), time.Since(start).Round(time.Millisecond))
 				return files, nil
 			}
 			if err != nil {
@@ -404,55 +406,29 @@ func ScanMultiplePaths(paths []string, recursive bool) ([]ArchiveFile, error) {
 		}
 	}
 
-	// Fallback to normal directory scanning
-	var files []ArchiveFile
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	// Use a channel to limit concurrent path scans
-	pathChan := make(chan string, len(paths))
-	numWorkers := 4 // Use fewer workers for multiple paths to avoid overwhelming the system
-
-	worker := func() {
-		defer wg.Done()
-		for path := range pathChan {
-			scanned, err := ScanDirectory(path, recursive)
-			if err != nil {
-				continue
-			}
-			if len(scanned) > 0 {
-				mu.Lock()
-				files = append(files, scanned...)
-				mu.Unlock()
-			}
+	// Fallback: manual directory walk, one root at a time (with per-root progress).
+	var all []ArchiveFile
+	for idx, p := range paths {
+		log.Printf("🔍 [%d/%d] Scanning root: %s", idx+1, len(paths), p)
+		start := time.Now()
+		files, err := ScanDirectory(p, recursive)
+		if err != nil {
+			log.Printf("⚠️  [%d/%d] Failed to scan %s: %v", idx+1, len(paths), p, err)
+			continue
 		}
+		all = append(all, files...)
+		log.Printf("✅ [%d/%d] %s done: %d matches (%d total) in %s",
+			idx+1, len(paths), p, len(files), len(all), time.Since(start).Round(time.Second))
 	}
-
-	// Start workers
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go worker()
-	}
-
-	// Queue all paths for processing
-	for _, path := range paths {
-		pathChan <- path
-	}
-	close(pathChan)
-
-	// Wait for all workers to complete
-	wg.Wait()
-
-	return files, nil
+	return all, nil
 }
 
-// IsEverythingAvailable checks if Everything is installed and running on Windows
+// IsEverythingAvailable checks if Everything's CLI (es.exe) is available on Windows.
 func IsEverythingAvailable() bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
 
-	// Check if es.exe exists in Program Files
 	possiblePaths := []string{
 		filepath.Join(os.Getenv("ProgramFiles"), "Everything", "es.exe"),
 		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Everything", "es.exe"),
@@ -466,12 +442,11 @@ func IsEverythingAvailable() bool {
 		}
 	}
 
-	// Try to find es.exe in PATH
 	_, err := exec.LookPath("es.exe")
 	return err == nil
 }
 
-// GetEverythingPath returns the path to es.exe if available
+// GetEverythingPath returns the path to es.exe if available, else the bare name.
 func GetEverythingPath() string {
 	possiblePaths := []string{
 		filepath.Join(os.Getenv("ProgramFiles"), "Everything", "es.exe"),
@@ -486,10 +461,10 @@ func GetEverythingPath() string {
 		}
 	}
 
-	return "es.exe" // Return the default name to be found in PATH
+	return "es.exe" // fall back to PATH lookup
 }
 
-// ScanWithEverything scans for archive/model files using Everything database
+// ScanWithEverything scans for archive/model/video files using the Everything index.
 func ScanWithEverything() ([]ArchiveFile, error) {
 	if !IsEverythingAvailable() {
 		return nil, fmt.Errorf("Everything is not available")
@@ -498,67 +473,60 @@ func ScanWithEverything() ([]ArchiveFile, error) {
 	esPath := GetEverythingPath()
 	var files []ArchiveFile
 
-	// Archive extensions
-	archiveExts := []string{
-		"*.zip", "*.rar", "*.7z", "*.tar", "*.gz", "*.bz2", "*.xz", "*.iso", "*.cab",
-	}
+	searchExts := []string{"*.stl", "*.obj", "*.zip", "*.rar", "*.7z"}
 
-	// Model extensions
-	modelExts := []string{
-		"*.stl", "*.obj", "*.3ds", "*.fbx", "*.blend", "*.step", "*.stp", "*.iges", "*.igs",
-		"*.ply", "*.off", "*.3mf", "*.glb", "*.gltf",
-	}
-
-	// Video extensions
-	videoExts := []string{
-		"*.mp4", "*.webm", "*.mkv", "*.avi", "*.mov", "*.wmv", "*.flv",
-	}
-
-	allExts := append(append(archiveExts, modelExts...), videoExts...)
-
-	// Query Everything for each extension
+	var filesFound int64
 	mu := sync.Mutex{}
 	var wg sync.WaitGroup
+
+	// Progress heartbeat (Everything is fast, but keep it consistent with the walk).
+	progressDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-progressDone:
+				return
+			case <-ticker.C:
+				log.Printf("   ⏳ [Everything] matches so far: %d", atomic.LoadInt64(&filesFound))
+			}
+		}
+	}()
+	defer close(progressDone)
 
 	searchExtension := func(ext string) {
 		defer wg.Done()
 
-		// Use Everything CLI: es -no-folders filename_pattern
-		cmd := exec.Command(esPath, "-no-folders", ext)
+		// ES search syntax: the "file:" function restricts results to files only.
+		// (The "-no-folders" switch is not supported by older es.exe versions and
+		// makes es.exe print its help text instead of results.)
+		cmd := exec.Command(esPath, "file:"+ext)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			log.Printf("⚠️ Error querying Everything for %s: %v", ext, err)
 			return
 		}
-
 		if err := cmd.Start(); err != nil {
 			log.Printf("⚠️ Error starting Everything query for %s: %v", ext, err)
 			return
 		}
 
 		scanner := bufio.NewScanner(stdout)
+		// Allow very long path lines.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			filePath := strings.TrimSpace(scanner.Text())
-			if filePath == "" {
+			if filePath == "" || isSystemFolder(filePath) {
 				continue
 			}
-
-			// Skip system folders
-			if isSystemFolder(filePath) {
-				continue
-			}
-
 			info, err := os.Stat(filePath)
-			if err != nil {
-				continue // File might have been deleted
+			if err != nil || info.IsDir() {
+				continue
 			}
-
-			if info.IsDir() {
-				continue // Skip directories
-			}
-
 			fileType := getArchiveType(filePath)
 			if fileType != "" {
+				atomic.AddInt64(&filesFound, 1)
 				mu.Lock()
 				files = append(files, ArchiveFile{
 					Name:    filepath.Base(filePath),
@@ -570,28 +538,25 @@ func ScanWithEverything() ([]ArchiveFile, error) {
 				mu.Unlock()
 			}
 		}
-
 		cmd.Wait()
 	}
 
-	// Search for all extensions concurrently
-	for _, ext := range allExts {
+	for _, ext := range searchExts {
 		wg.Add(1)
 		go searchExtension(ext)
 	}
-
 	wg.Wait()
 
 	return files, nil
 }
 
-// IsLocateAvailable checks if locate command is available on Linux/macOS
+// IsLocateAvailable checks if the locate command is available (Linux/macOS).
 func IsLocateAvailable() bool {
 	_, err := exec.LookPath("locate")
 	return err == nil
 }
 
-// ScanWithLocate scans for archive/model files using the locate command (Linux/macOS)
+// ScanWithLocate scans for archive/model/video files using the locate command.
 func ScanWithLocate() ([]ArchiveFile, error) {
 	if !IsLocateAvailable() {
 		return nil, fmt.Errorf("locate command is not available")
@@ -600,57 +565,34 @@ func ScanWithLocate() ([]ArchiveFile, error) {
 	var files []ArchiveFile
 	mu := sync.Mutex{}
 
-	// Archive extensions
-	archiveExts := []string{
-		"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "cab",
-	}
-
-	// Model extensions
+	archiveExts := []string{"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "cab"}
 	modelExts := []string{
 		"stl", "obj", "3ds", "fbx", "blend", "step", "stp", "iges", "igs",
 		"ply", "off", "3mf", "glb", "gltf",
 	}
-
-	// Video extensions
-	videoExts := []string{
-		"mp4", "webm", "mkv", "avi", "mov", "wmv", "flv",
-	}
-
+	videoExts := []string{"mp4", "webm", "mkv", "avi", "mov", "wmv", "flv"}
 	allExts := append(append(archiveExts, modelExts...), videoExts...)
 
 	searchExtension := func(ext string) {
-		// Use locate to search for files with extension
 		cmd := exec.Command("locate", "-i", "*."+ext)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return
 		}
-
 		if err := cmd.Start(); err != nil {
 			return
 		}
-
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			filePath := strings.TrimSpace(scanner.Text())
-			if filePath == "" {
+			if filePath == "" || isSystemFolder(filePath) {
 				continue
 			}
-
-			// Skip system folders
-			if isSystemFolder(filePath) {
-				continue
-			}
-
 			info, err := os.Stat(filePath)
-			if err != nil {
+			if err != nil || info.IsDir() {
 				continue
 			}
-
-			if info.IsDir() {
-				continue
-			}
-
 			fileType := getArchiveType(filePath)
 			if fileType != "" {
 				mu.Lock()
@@ -664,11 +606,9 @@ func ScanWithLocate() ([]ArchiveFile, error) {
 				mu.Unlock()
 			}
 		}
-
 		cmd.Wait()
 	}
 
-	// Search extensions sequentially with locate (it's fast enough)
 	for _, ext := range allExts {
 		searchExtension(ext)
 	}
@@ -676,13 +616,13 @@ func ScanWithLocate() ([]ArchiveFile, error) {
 	return files, nil
 }
 
-// IsMdfindAvailable checks if mdfind (Spotlight) is available on macOS
+// IsMdfindAvailable checks if mdfind (Spotlight) is available on macOS.
 func IsMdfindAvailable() bool {
 	_, err := exec.LookPath("mdfind")
 	return err == nil
 }
 
-// ScanWithMdfind scans for archive/model files using Spotlight (macOS)
+// ScanWithMdfind scans for archive/model/video files using Spotlight (macOS).
 func ScanWithMdfind() ([]ArchiveFile, error) {
 	if !IsMdfindAvailable() {
 		return nil, fmt.Errorf("mdfind command is not available")
@@ -691,58 +631,35 @@ func ScanWithMdfind() ([]ArchiveFile, error) {
 	var files []ArchiveFile
 	mu := sync.Mutex{}
 
-	// Archive extensions
-	archiveExts := []string{
-		"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "cab",
-	}
-
-	// Model extensions
+	archiveExts := []string{"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "cab"}
 	modelExts := []string{
 		"stl", "obj", "3ds", "fbx", "blend", "step", "stp", "iges", "igs",
 		"ply", "off", "3mf", "glb", "gltf",
 	}
-
-	// Video extensions
-	videoExts := []string{
-		"mp4", "webm", "mkv", "avi", "mov", "wmv", "flv",
-	}
-
+	videoExts := []string{"mp4", "webm", "mkv", "avi", "mov", "wmv", "flv"}
 	allExts := append(append(archiveExts, modelExts...), videoExts...)
 
 	searchExtension := func(ext string) {
-		// mdfind searches Spotlight index: -name looks for files, -onlyin limits scope
 		query := fmt.Sprintf("filename:%s.%s", "*", ext)
 		cmd := exec.Command("mdfind", query)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return
 		}
-
 		if err := cmd.Start(); err != nil {
 			return
 		}
-
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			filePath := strings.TrimSpace(scanner.Text())
-			if filePath == "" {
+			if filePath == "" || isSystemFolder(filePath) {
 				continue
 			}
-
-			// Skip system folders
-			if isSystemFolder(filePath) {
-				continue
-			}
-
 			info, err := os.Stat(filePath)
-			if err != nil {
+			if err != nil || info.IsDir() {
 				continue
 			}
-
-			if info.IsDir() {
-				continue
-			}
-
 			fileType := getArchiveType(filePath)
 			if fileType != "" {
 				mu.Lock()
@@ -756,11 +673,9 @@ func ScanWithMdfind() ([]ArchiveFile, error) {
 				mu.Unlock()
 			}
 		}
-
 		cmd.Wait()
 	}
 
-	// Search extensions sequentially with mdfind
 	for _, ext := range allExts {
 		searchExtension(ext)
 	}

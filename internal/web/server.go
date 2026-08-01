@@ -31,38 +31,71 @@ import (
 
 // Server represents the web dashboard server
 type Server struct {
-	addr               string
-	report             *reporter.Report
-	trashPath          string
-	leaveRef           bool
-	debug              bool
-	runStep3Func       func()
-	runVisualFunc      func()
-	allFiles           []reporter.FileInfo
-	cache              *db.Cache
-	previewSem         chan struct{}
-	scanDir            string
-	config             *config.AppConfig
-	mu                 sync.Mutex
+	addr          string
+	report        *reporter.Report
+	trashPath     string
+	leaveRef      bool
+	debug         bool
+	runStep3Func  func()
+	runVisualFunc func()
+	allFiles      []reporter.FileInfo
+	cache         *db.Cache
+	previewSem    chan struct{}
+	scanDir       string
+	config        *config.AppConfig
+	mu            sync.Mutex
 	// activePreviewFiles tracks files currently being extracted for preview.
 	// Key: file path (string), Value: *sync.WaitGroup
 	activePreviewFiles sync.Map
+	// Background preview job queue and statuses
+	jobQueue  chan *previewJob
+	jobStatus sync.Map // jobID -> status string (queued|processing|done|failed)
+	// recompressJobs keeps track of ongoing recompression tasks and their progress.
+	recompressJobs   map[string]*recompressJob
+	recompressJobsMu sync.Mutex
+}
+
+type recompressJob struct {
+	ID         string    `json:"id"`
+	Path       string    `json:"path"`
+	Status     string    `json:"status"`
+	Percent    int       `json:"percent"`
+	Message    string    `json:"message"`
+	SizeBefore int64     `json:"size_before,omitempty"`
+	SizeAfter  int64     `json:"size_after,omitempty"`
+	Started    time.Time `json:"started_at"`
+	Finished   time.Time `json:"finished_at,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+// previewJob represents a background thumbnail rendering job
+type previewJob struct {
+	JobID       string
+	Path        string
+	Internal    string
+	CacheKey    string
+	FileExt     string
+	ContentType string
+	ModTime     string
+	IsSTRRender bool
 }
 
 // NewServer creates a new web dashboard server
 func NewServer(port int, report *reporter.Report, trashPath string, leaveRef bool, runStep3Func func(), runVisualFunc func(), allFiles []reporter.FileInfo, cache *db.Cache, scanDir string, appConfig *config.AppConfig) *Server {
 	return &Server{
-		addr:          fmt.Sprintf(":%d", port),
-		report:        report,
-		trashPath:     trashPath,
-		leaveRef:      leaveRef,
-		runStep3Func:  runStep3Func,
-		runVisualFunc: runVisualFunc,
-		allFiles:      allFileInfos(allFiles),
-		cache:         cache,
-		previewSem:    make(chan struct{}, 4), // Allow 4 concurrent extractions
-		scanDir:       scanDir,
-		config:        appConfig,
+		addr:           fmt.Sprintf(":%d", port),
+		report:         report,
+		trashPath:      trashPath,
+		leaveRef:       leaveRef,
+		runStep3Func:   runStep3Func,
+		runVisualFunc:  runVisualFunc,
+		allFiles:       allFileInfos(allFiles),
+		cache:          cache,
+		previewSem:     make(chan struct{}, 16), // Allow 16 concurrent extractions (increased from 4)
+		scanDir:        scanDir,
+		config:         appConfig,
+		recompressJobs: make(map[string]*recompressJob),
+		jobQueue:       make(chan *previewJob, 128),
 	}
 }
 
@@ -73,7 +106,94 @@ func allFileInfos(files []reporter.FileInfo) []reporter.FileInfo {
 	return files
 }
 
+func (s *Server) createRecompressJob(path string) string {
+	s.recompressJobsMu.Lock()
+	defer s.recompressJobsMu.Unlock()
+
+	jobID := fmt.Sprintf("recompress-%d", time.Now().UnixNano())
+	sizeBefore := int64(0)
+	if info, err := os.Stat(path); err == nil {
+		sizeBefore = info.Size()
+	}
+	s.recompressJobs[jobID] = &recompressJob{
+		ID:         jobID,
+		Path:       path,
+		Status:     "queued",
+		Percent:    0,
+		Message:    "Queued",
+		SizeBefore: sizeBefore,
+		Started:    time.Now(),
+	}
+	log.Printf("📦 [API] Recompression queued: %s", path)
+	return jobID
+}
+
+func (s *Server) getRecompressJob(jobID string) *recompressJob {
+	s.recompressJobsMu.Lock()
+	defer s.recompressJobsMu.Unlock()
+	return s.recompressJobs[jobID]
+}
+
+func (s *Server) updateRecompressJob(jobID, status string, percent int, message string) {
+	s.recompressJobsMu.Lock()
+	defer s.recompressJobsMu.Unlock()
+	job, ok := s.recompressJobs[jobID]
+	if !ok || job == nil {
+		return
+	}
+	job.Status = status
+	job.Percent = percent
+	job.Message = message
+	log.Printf("📦 [API] Recompression %s: %d%% - %s", job.Path, percent, message)
+}
+
+func (s *Server) completeRecompressJob(jobID string, percent int, status, errMsg string, sizeAfter int64) {
+	s.recompressJobsMu.Lock()
+	defer s.recompressJobsMu.Unlock()
+	job, ok := s.recompressJobs[jobID]
+	if !ok || job == nil {
+		return
+	}
+
+	normalizedStatus := strings.ToLower(status)
+	if normalizedStatus == "finished" || normalizedStatus == "complete" || normalizedStatus == "completed" {
+		normalizedStatus = "completed"
+	} else if normalizedStatus == "failed" || normalizedStatus == "error" || normalizedStatus == "failure" {
+		normalizedStatus = "failed"
+	}
+
+	job.Status = normalizedStatus
+	job.Percent = percent
+	job.SizeAfter = sizeAfter
+	if normalizedStatus == "completed" {
+		job.Message = fmt.Sprintf("Completed: %s → %s", formatBytes(job.SizeBefore), formatBytes(job.SizeAfter))
+		job.Finished = time.Now()
+		log.Printf("✅ [API] Recompression completed for %s: %s → %s", job.Path, formatBytes(job.SizeBefore), formatBytes(job.SizeAfter))
+	} else {
+		job.Message = "Failed"
+		job.Finished = time.Now()
+		job.Error = errMsg
+		log.Printf("❌ [API] Recompression failed for %s: %s", job.Path, errMsg)
+	}
+}
+
 // SetDebug enables or disables debug mode
+func formatBytes(bytes int64) string {
+	if bytes <= 0 {
+		return "0 B"
+	}
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
 func (s *Server) SetDebug(enabled bool) {
 	s.debug = enabled
 }
@@ -326,7 +446,7 @@ func (s *Server) Start() error {
 
 	api.Get("/all-files", func(c *fiber.Ctx) error {
 		log.Printf("📋 [API] Received request for all files from gallery")
-		
+
 		// Use the full scanned list if available, otherwise fallback to map-based collection
 		var files []reporter.FileInfo
 		if len(s.allFiles) > 0 {
@@ -341,7 +461,7 @@ func (s *Server) Start() error {
 				}
 			}
 			log.Printf("📊 [API] Collected %d files from SizeGroups", len(fileMap))
-			
+
 			for _, group := range s.report.SimilarGroups {
 				for _, file := range group.Files {
 					fileMap[file.Path] = file
@@ -366,7 +486,7 @@ func (s *Server) Start() error {
 		path := c.Query("path")
 		internalPath := c.Query("internal_path")
 		previewType := c.Query("type", "preview")
-		
+
 		if path == "" {
 			return c.Status(400).SendString("Path is required")
 		}
@@ -379,7 +499,7 @@ func (s *Server) Start() error {
 		if ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || ext == ".gz" {
 			isArchive = true
 		}
-		
+
 		log.Printf("📦 [API] Archive: %v, Format: %s", isArchive, ext)
 
 		// 1. Handling when internalPath is NOT specified (Initial Gallery Load)
@@ -387,12 +507,12 @@ func (s *Server) Start() error {
 			if !isArchive {
 				// Direct file (image, video, model)
 				log.Printf("📄 [API] Direct file (not archive), path: %s", path)
-				
+
 				// Special handling for STL files when format=png is requested
 				formatParam := c.Query("format")
 				if formatParam == "png" && ext == ".stl" {
 					log.Printf("🎚️  [API] STL render requested for direct file")
-					
+
 					// Read the STL file
 					data, err := os.ReadFile(path)
 					if err != nil {
@@ -400,25 +520,25 @@ func (s *Server) Start() error {
 						return c.Status(404).SendString("File not found")
 					}
 					log.Printf("✅ [API] Read STL file (%.1f KB)", float64(len(data))/1024)
-					
+
 					// Parse and render to PNG
 					info, err := stl.ParseSTL(data)
 					if err != nil {
 						log.Printf("❌ [API] Failed to parse STL file: %v", err)
 						return c.Status(422).SendString("Invalid STL file")
 					}
-					
+
 					pngData, err := stl.RenderToPNG(info, 800, 600)
 					if err != nil {
 						log.Printf("❌ [API] Failed to render STL to PNG: %v", err)
 						return c.Status(500).SendString("Render failed")
 					}
-					
+
 					log.Printf("✅ [API] STL rendered to PNG (%.1f KB)", float64(len(pngData))/1024)
 					c.Set("Content-Type", "image/png")
 					return c.Send(pngData)
 				}
-				
+
 				// Regular file: Send with correct content type
 				log.Printf("📄 [API] Sending direct file with type: %s", getContentType(path))
 				contentType := getContentType(path)
@@ -441,7 +561,7 @@ func (s *Server) Start() error {
 
 			if !found {
 				log.Printf("🔍 [API] Cache miss or model type, searching for preview in archive...")
-				
+
 				// Archive without internal path: Find the best preview filename efficiently
 				var filename string
 				var err error
@@ -477,7 +597,7 @@ func (s *Server) Start() error {
 						return c.Status(404).SendString(errMsg)
 					}
 				}
-				
+
 				log.Printf("✅ [API] Found preview: %s", filename)
 				internalPath = filename
 				foundExt := strings.ToLower(filepath.Ext(internalPath))
@@ -520,7 +640,7 @@ func (s *Server) Start() error {
 		if s.cache != nil {
 			if cachedData, cType, ok := s.cache.GetThumbnail(cacheKey); ok {
 				log.Printf("✅ [API] Thumbnail found in cache (%.1f KB, type: %s)", float64(len(cachedData))/1024, cType)
-				
+
 				// Security check: if it's supposed to be PNG but cache says STL, ignore it (corrupted cache)
 				if isSTRRender && cType != "image/png" && cType != "image/jpeg" {
 					log.Printf("⚠️  [API] Cache has wrong type for STL render (%s), re-rendering", cType)
@@ -532,101 +652,181 @@ func (s *Server) Start() error {
 			}
 		}
 
-		log.Printf("🔓 [API] Thumbnail not in cache, extracting from archive...")
+		log.Printf("🔓 [API] Thumbnail not in cache, enqueueing background job for extraction...")
 
-		// 2. Fallback to extracting it (limited concurrency)
-		// Register this file as being actively extracted so that a concurrent
-		// delete request can wait for us to finish before touching the file.
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		// Store the WaitGroup, or merge with an existing one if present.
-		actual, loaded := s.activePreviewFiles.LoadOrStore(path, wg)
-		if loaded {
-			// Another goroutine already registered a WaitGroup; add to it.
-			existingWg := actual.(*sync.WaitGroup)
-			existingWg.Add(1)
-			wg = existingWg
-			log.Printf("🔄 [API] Joining existing extraction for: %s", path)
-		}
+			// Try a fast synchronous extraction if we can acquire the semaphore immediately
+			select {
+			case s.previewSem <- struct{}{}:
+				// Fast-path: perform extraction inline to improve UX for first request
+				log.Printf("🔧 [API] Fast-path extraction for: %s", internalPath)
+				dataFast, errFast := archive.GetFileFromArchive(path, internalPath)
+				if errFast == nil {
+					// SPECIAL CASE: STL render
+					if isSTRRender {
+						info, err := stl.ParseSTL(dataFast)
+						if err == nil {
+							if pngData, err := stl.RenderToPNG(info, 800, 600); err == nil {
+								dataFast = pngData
+								log.Printf("✅ [API] Fast-path STL rendered for: %s", internalPath)
+							} else {
+								log.Printf("❌ [API] Fast-path STL render failed: %v", err)
+							}
+						} else {
+							log.Printf("❌ [API] Fast-path STL parse failed: %v", err)
+						}
+					}
 
-		s.previewSem <- struct{}{}
-		log.Printf("🔓 [API] Extracting: %s from %s", internalPath, path)
-		
-		data, err := archive.GetFileFromArchive(path, internalPath)
-		if err != nil {
-			<-s.previewSem
-			wg.Done()
-			s.activePreviewFiles.Delete(path)
-			log.Printf("❌ [API] Extraction failed: %v", err)
-			return c.Status(404).SendString(err.Error())
-		}
-		
-		log.Printf("✅ [API] Extracted successfully (%.1f KB)", float64(len(data))/1024)
+					// Resize if image
+					contentTypeFast := getContentType(cacheKey + fileExt)
+					if strings.HasPrefix(contentTypeFast, "image/") {
+						img, _, err := image.Decode(bytes.NewReader(dataFast))
+						if err == nil {
+							bounds := img.Bounds()
+							if bounds.Dx() > 256 || bounds.Dy() > 256 {
+								img = resize.Thumbnail(256, 256, img, resize.Bilinear)
+								buf := new(bytes.Buffer)
+								if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 80}); err == nil {
+									dataFast = buf.Bytes()
+									contentTypeFast = "image/jpeg"
+								}
+							}
+						}
+					}
 
-		// SPECIAL CASE: If it's an STL and we want a PNG preview
-		stlRenderFailed := false
-		if isSTRRender {
-			log.Printf("🎚️  [API] Starting STL render - internalPath: %s (len: %d)", internalPath, len(internalPath))
-			info, err := stl.ParseSTL(data)
-			if err == nil {
-				log.Printf("✅ [API] STL parsed successfully - triangles: %d", info.TriangleCount)
-				pngData, err := stl.RenderToPNG(info, 800, 600)
-				if err == nil {
-					data = pngData
-					log.Printf("✅ [API] STL rendered to PNG (%.1f KB)", float64(len(data))/1024)
-				} else {
-					log.Printf("❌ [API] Failed to render STL: %v", err)
-					stlRenderFailed = true
+					if s.cache != nil {
+						s.cache.PutThumbnail(cacheKey, dataFast, contentTypeFast)
+						go s.checkCacheLimit()
+					}
+
+					<-s.previewSem
+					c.Set("X-Internal-Path", internalPath)
+					c.Set("Content-Type", contentTypeFast)
+					log.Printf("✅ [API] Fast-path returning preview (%.1f KB)", float64(len(dataFast))/1024)
+					return c.Send(dataFast)
 				}
-			} else {
-				log.Printf("❌ [API] Failed to parse STL: %v", err)
-				stlRenderFailed = true
+				// Fast-path failed, release semaphore and fallthrough to enqueue
+				<-s.previewSem
+				log.Printf("⚠️  [API] Fast-path extraction failed for %s, enqueuing", internalPath)
+			default:
+				// Could not acquire semaphore immediately; continue to enqueue
 			}
-		} else {
-			log.Printf("📝 [API] Skipped STL render - isSTRRender: %v", isSTRRender)
-		}
-		<-s.previewSem
-		wg.Done()
-		s.activePreviewFiles.Delete(path)
 
-		contentType := getContentType(cacheKey + fileExt)
-		log.Printf("📊 [API] Content type: %s", contentType)
-		
-		// If it's an image, resize it to max 256x256
-		if strings.HasPrefix(contentType, "image/") {
-			img, _, err := image.Decode(bytes.NewReader(data))
-			if err == nil {
-				bounds := img.Bounds()
-				if bounds.Dx() > 256 || bounds.Dy() > 256 {
-					log.Printf("🖼️  [API] Resizing image from %dx%d to 256x256", bounds.Dx(), bounds.Dy())
-					img = resize.Thumbnail(256, 256, img, resize.Bilinear)
-					buf := new(bytes.Buffer)
-					// Encode to JPEG to save space
-					if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 80}); err == nil {
-						data = buf.Bytes()
-						contentType = "image/jpeg"
-						log.Printf("✅ [API] Image compressed and resized (%.1f KB)", float64(len(data))/1024)
+			// Use cacheKey as job ID (unique per file/internal path)
+		jobID := cacheKey
+
+		// If job already exists, return 202
+		if v, ok := s.jobStatus.Load(jobID); ok {
+			status := v.(string)
+			log.Printf("🔁 [API] Job already exists: %s (status=%s)", jobID, status)
+			c.Set("X-Job-ID", jobID)
+			return c.Status(202).JSON(fiber.Map{"status": status, "job": jobID, "poll": "/api/preview-status?job=" + jobID})
+		}
+
+		// Enqueue job
+		// compute modTime at enqueue time
+		modTimeLocal := ""
+		if info2, err := os.Stat(path); err == nil && info2 != nil {
+			modTimeLocal = info2.ModTime().String()
+		}
+		pj := &previewJob{
+			JobID:       jobID,
+			Path:        path,
+			Internal:    internalPath,
+			CacheKey:    cacheKey,
+			FileExt:     fileExt,
+			ModTime:     modTimeLocal,
+			IsSTRRender: isSTRRender,
+		}
+		s.jobStatus.Store(jobID, "queued")
+		select {
+		case s.jobQueue <- pj:
+			log.Printf("📥 [API] Enqueued preview job: %s", jobID)
+			c.Set("X-Job-ID", jobID)
+			// Short wait: block briefly (up to 2s) to see if worker completes fast
+			shortTimeout := time.After(2 * time.Second)
+			shortTicker := time.NewTicker(150 * time.Millisecond)
+			defer shortTicker.Stop()
+			for {
+				select {
+				case <-shortTimeout:
+					// If client explicitly asked to wait longer, honor it
+					if c.Query("wait") == "1" {
+						timeout := time.After(10 * time.Second)
+						ticker := time.NewTicker(200 * time.Millisecond)
+						defer ticker.Stop()
+						for {
+							select {
+							case <-timeout:
+								return c.Status(202).JSON(fiber.Map{"status": "processing", "job": jobID})
+							case <-ticker.C:
+								if v, ok := s.jobStatus.Load(jobID); ok {
+									if v.(string) == "done" {
+										if s.cache != nil {
+											if cachedData, cType, ok := s.cache.GetThumbnail(cacheKey); ok {
+												c.Set("Content-Type", cType)
+												return c.Send(cachedData)
+											}
+										}
+										return c.Status(202).JSON(fiber.Map{"status": "done", "job": jobID})
+									}
+									if v.(string) == "failed" {
+										return c.Status(500).JSON(fiber.Map{"status": "failed", "job": jobID})
+									}
+								}
+							}
+						}
+					}
+					return c.Status(202).JSON(fiber.Map{"status": "queued", "job": jobID, "poll": "/api/preview-status?job=" + jobID})
+				case <-shortTicker.C:
+					if v, ok := s.jobStatus.Load(jobID); ok {
+						if v.(string) == "done" {
+							if s.cache != nil {
+								if cachedData, cType, ok := s.cache.GetThumbnail(cacheKey); ok {
+									c.Set("Content-Type", cType)
+									return c.Send(cachedData)
+								}
+							}
+							return c.Status(202).JSON(fiber.Map{"status": "done", "job": jobID})
+						}
+						if v.(string) == "failed" {
+							return c.Status(500).JSON(fiber.Map{"status": "failed", "job": jobID})
+						}
 					}
 				}
 			}
-		}
-
-		if s.cache != nil {
-			// Only cache if: not an STL or STL was successfully rendered
-			if !isSTRRender || (isSTRRender && !stlRenderFailed) {
-				log.Printf("💾 [API] Saving thumbnail to cache...")
-				s.cache.PutThumbnail(cacheKey, data, contentType)
-				// Enforce limit
-				go s.checkCacheLimit()
-			} else {
-				log.Printf("⚠️  [API] Not caching failed STL render (will retry next request)")
+			// If client asked to wait, block for up to 10s
+			if c.Query("wait") == "1" {
+				timeout := time.After(10 * time.Second)
+				ticker := time.NewTicker(200 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-timeout:
+						return c.Status(202).JSON(fiber.Map{"status": "processing", "job": jobID})
+					case <-ticker.C:
+						if v, ok := s.jobStatus.Load(jobID); ok {
+							if v.(string) == "done" {
+								if s.cache != nil {
+									if cachedData, cType, ok := s.cache.GetThumbnail(cacheKey); ok {
+										c.Set("Content-Type", cType)
+										return c.Send(cachedData)
+									}
+								}
+								return c.Status(202).JSON(fiber.Map{"status": "done", "job": jobID})
+							}
+							if v.(string) == "failed" {
+								return c.Status(500).JSON(fiber.Map{"status": "failed", "job": jobID})
+							}
+						}
+					}
+				}
 			}
+			return c.Status(202).JSON(fiber.Map{"status": "queued", "job": jobID, "poll": "/api/preview-status?job=" + jobID})
+		default:
+			// Queue is full
+			log.Printf("⚠️  [API] Job queue full, rejecting: %s", jobID)
+			return c.Status(503).SendString("Server busy, try again")
 		}
-
-		c.Set("X-Internal-Path", internalPath)
-		c.Set("Content-Type", contentType)
-		log.Printf("✅ [API] Returning preview (%.1f KB, type: %s)", float64(len(data))/1024, contentType)
-		return c.Send(data)
 	})
 
 	api.Get("/list-previews", func(c *fiber.Ctx) error {
@@ -645,6 +845,26 @@ func (s *Server) Start() error {
 		})
 	})
 
+	// Preview job status endpoint
+	api.Get("/preview-status", func(c *fiber.Ctx) error {
+		jobID := c.Query("job")
+		if jobID == "" {
+			return c.Status(400).SendString("job is required")
+		}
+		if v, ok := s.jobStatus.Load(jobID); ok {
+			status := v.(string)
+			// If done, try returning cached thumbnail directly
+			if status == "done" && s.cache != nil {
+				if data, cType, ok := s.cache.GetThumbnail(jobID); ok {
+					c.Set("Content-Type", cType)
+					return c.Send(data)
+				}
+			}
+			return c.Status(200).JSON(fiber.Map{"job": jobID, "status": status})
+		}
+		return c.Status(404).JSON(fiber.Map{"error": "job not found"})
+	})
+
 	api.Get("/open", func(c *fiber.Ctx) error {
 		path := c.Query("path")
 		mode := c.Query("mode", "reveal") // "reveal" or "launch"
@@ -652,35 +872,134 @@ func (s *Server) Start() error {
 			return c.Status(400).SendString("Path is required")
 		}
 
+		// Fix Windows drive letter paths that lost the backslash during URL encoding
+		// e.g., "R:Pr\..." becomes "R:\Pr\..."
+		if len(path) > 2 && path[1] == ':' && path[2] != '\\' && path[2] != '/' {
+			path = path[:2] + "\\" + path[2:]
+			log.Printf("🔧 [API] Fixed drive letter path to: %s", path)
+		}
+
+		log.Printf("📂 [API] Open request: path=%s, mode=%s", path, mode)
+
+		// For reveal mode, always open the parent directory
+		// This avoids issues with non-existent files or special characters in paths
+		if mode == "reveal" {
+			// Just open the directory that contains the file
+			openPath := filepath.Dir(path)
+			log.Printf("📂 [API] Opening directory: %s", openPath)
+
+			var cmd *exec.Cmd
+			switch runtime.GOOS {
+			case "windows":
+				cmd = exec.Command("explorer.exe", openPath)
+			case "darwin":
+				cmd = exec.Command("open", openPath)
+			case "linux":
+				cmd = exec.Command("xdg-open", openPath)
+			default:
+				return c.Status(500).SendString("Unsupported OS")
+			}
+
+			if err := cmd.Start(); err != nil {
+				log.Printf("❌ [API] Failed to open directory: %v", err)
+				return c.Status(500).SendString(err.Error())
+			}
+			log.Printf("✅ [API] Successfully opened directory: %s", openPath)
+			return c.SendStatus(200)
+		}
+
+		// For launch mode, try to open the file if it exists
 		var cmd *exec.Cmd
 		switch runtime.GOOS {
 		case "windows":
-			if mode == "reveal" {
-				cmd = exec.Command("explorer.exe", "/select,", path)
-			} else {
-				// Launch with associated app
-				cmd = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", path)
-			}
+			cmd = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", path)
 		case "darwin":
-			if mode == "reveal" {
-				cmd = exec.Command("open", "-R", path)
-			} else {
-				cmd = exec.Command("open", path)
-			}
+			cmd = exec.Command("open", path)
 		case "linux":
-			if mode == "reveal" {
-				cmd = exec.Command("xdg-open", filepath.Dir(path))
-			} else {
-				cmd = exec.Command("xdg-open", path)
-			}
+			cmd = exec.Command("xdg-open", path)
 		default:
 			return c.Status(500).SendString("Unsupported OS")
 		}
 
 		if err := cmd.Start(); err != nil {
+			log.Printf("❌ [API] Failed to launch file: %v", err)
 			return c.Status(500).SendString(err.Error())
 		}
+		log.Printf("✅ [API] Successfully launched file: %s", path)
 		return c.SendStatus(200)
+	})
+
+	api.Post("/recompress", func(c *fiber.Ctx) error {
+		type recompressRequest struct {
+			Path string `json:"path"`
+		}
+		var req recompressRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).SendString("Invalid request body")
+		}
+		if req.Path == "" {
+			return c.Status(400).SendString("Path is required")
+		}
+
+		if len(req.Path) > 2 && req.Path[1] == ':' && req.Path[2] != '\\' && req.Path[2] != '/' {
+			req.Path = req.Path[:2] + "\\" + req.Path[2:]
+		}
+
+		if _, err := os.Stat(req.Path); os.IsNotExist(err) {
+			return c.Status(404).SendString("File not found")
+		}
+
+		jobID := s.createRecompressJob(req.Path)
+		go func(jobID, path string) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("❌ [API] Panic during recompress for %s: %v", path, r)
+					s.completeRecompressJob(jobID, 0, "Failed", fmt.Sprintf("panic: %v", r), 0)
+				}
+			}()
+
+			s.updateRecompressJob(jobID, "running", 10, "Preparing recompression")
+			input := path
+			output := path + ".recompressed.zip"
+			var err error
+			if filepath.Ext(input) == ".zip" || filepath.Ext(input) == ".rar" || filepath.Ext(input) == ".7z" {
+				s.updateRecompressJob(jobID, "running", 25, "Unpacking archive contents")
+				_, err = archive.RecompressArchive(input, output)
+			} else {
+				s.updateRecompressJob(jobID, "running", 25, "Wrapping file into a fresh archive")
+				_, err = archive.RecompressFile(input, output)
+			}
+			if err != nil {
+				s.completeRecompressJob(jobID, 0, "failed", err.Error(), 0)
+				return
+			}
+
+			s.updateRecompressJob(jobID, "running", 80, "Replacing original file")
+			if err := os.Remove(input); err != nil {
+				s.completeRecompressJob(jobID, 0, "failed", err.Error(), 0)
+				return
+			}
+			if err := os.Rename(output, input); err != nil {
+				s.completeRecompressJob(jobID, 0, "failed", err.Error(), 0)
+				return
+			}
+
+			sizeAfter := int64(0)
+			if info, statErr := os.Stat(input); statErr == nil {
+				sizeAfter = info.Size()
+			}
+			s.completeRecompressJob(jobID, 100, "completed", "", sizeAfter)
+		}(jobID, req.Path)
+
+		return c.JSON(fiber.Map{"job_id": jobID, "status": "queued"})
+	})
+
+	api.Get("/recompress/:jobID", func(c *fiber.Ctx) error {
+		job := s.getRecompressJob(c.Params("jobID"))
+		if job == nil {
+			return c.Status(404).SendString("Job not found")
+		}
+		return c.JSON(job)
 	})
 
 	api.Post("/delete", func(c *fiber.Ctx) error {
@@ -799,6 +1118,74 @@ func (s *Server) Start() error {
 	})
 
 	log.Printf("🚀 Web Dashboard available at: http://localhost%s", s.addr)
+
+	// Start background preview workers
+	go func() {
+		workerCount := 6
+		for i := 0; i < workerCount; i++ {
+			go func(idx int) {
+				log.Printf("🔧 [PREVIEW WORKER] started %d", idx)
+				for job := range s.jobQueue {
+					log.Printf("🔨 [PREVIEW WORKER] processing job %s", job.JobID)
+					s.jobStatus.Store(job.JobID, "processing")
+					// Acquire extraction semaphore
+					s.previewSem <- struct{}{}
+					data, err := archive.GetFileFromArchive(job.Path, job.Internal)
+					if err != nil {
+						log.Printf("❌ [PREVIEW WORKER] extraction failed for %s: %v", job.JobID, err)
+						s.jobStatus.Store(job.JobID, "failed")
+						<-s.previewSem
+						continue
+					}
+					// If STL render requested
+					if job.IsSTRRender {
+						info, err := stl.ParseSTL(data)
+						if err == nil {
+							pngData, err := stl.RenderToPNG(info, 800, 600)
+							if err == nil {
+								data = pngData
+								log.Printf("✅ [PREVIEW WORKER] STL rendered for %s", job.JobID)
+							} else {
+								log.Printf("❌ [PREVIEW WORKER] STL render failed for %s: %v", job.JobID, err)
+								s.jobStatus.Store(job.JobID, "failed")
+								<-s.previewSem
+								continue
+							}
+						} else {
+							log.Printf("❌ [PREVIEW WORKER] STL parse failed for %s", job.JobID)
+							s.jobStatus.Store(job.JobID, "failed")
+							<-s.previewSem
+							continue
+						}
+					}
+					// Determine content type and resize if image
+					contentType := getContentType(job.CacheKey + job.FileExt)
+					if strings.HasPrefix(contentType, "image/") {
+						img, _, err := image.Decode(bytes.NewReader(data))
+						if err == nil {
+							bounds := img.Bounds()
+							if bounds.Dx() > 256 || bounds.Dy() > 256 {
+								img = resize.Thumbnail(256, 256, img, resize.Bilinear)
+								buf := new(bytes.Buffer)
+								if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 80}); err == nil {
+									data = buf.Bytes()
+									contentType = "image/jpeg"
+								}
+							}
+						}
+					}
+					// Save to cache
+					if s.cache != nil {
+						s.cache.PutThumbnail(job.CacheKey, data, contentType)
+						go s.checkCacheLimit()
+					}
+					s.jobStatus.Store(job.JobID, "done")
+					<-s.previewSem
+					log.Printf("✅ [PREVIEW WORKER] job %s done", job.JobID)
+				}
+			}(i)
+		}
+	}()
 	return app.Listen(s.addr)
 }
 
@@ -809,8 +1196,8 @@ func (s *Server) performFullScan(cfg *config.AppConfig) {
 	} else {
 		scanLogMsg = fmt.Sprintf("🔍 Starting web-triggered scan: %s", cfg.Directory)
 	}
-	log.Printf(scanLogMsg)
-	
+	log.Printf("%s", scanLogMsg)
+
 	s.mu.Lock()
 	s.report = &reporter.Report{
 		Status: "analyzing",
@@ -819,10 +1206,10 @@ func (s *Server) performFullScan(cfg *config.AppConfig) {
 	s.mu.Unlock()
 
 	startTime := time.Now()
-	
+
 	var files []scanner.ArchiveFile
 	var err error
-	
+
 	if cfg.ScanFullSystem {
 		// Scan multiple root paths
 		rootPaths := scanner.GetRootPaths()
@@ -832,7 +1219,7 @@ func (s *Server) performFullScan(cfg *config.AppConfig) {
 		// Scan single directory
 		files, err = scanner.ScanDirectory(cfg.Directory, cfg.Recursive)
 	}
-	
+
 	if err != nil {
 		log.Printf("❌ Scan failed: %v", err)
 		s.mu.Lock()
@@ -1002,9 +1389,9 @@ func (s *Server) RunVisual() {
 			var fileInfos []reporter.FileInfo
 			for _, f := range vg.Files {
 				fileInfos = append(fileInfos, reporter.FileInfo{
-					Name:    f.Name,
-					Path:    f.Path,
-					Size:    f.Size,
+					Name:        f.Name,
+					Path:        f.Path,
+					Size:        f.Size,
 					Type:        f.Type,
 					ModTime:     f.ModTime,
 					PHash:       f.PHash,

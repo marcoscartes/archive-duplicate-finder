@@ -26,7 +26,8 @@ import {
   ArrowUp01,
   ArrowDown01,
   Settings,
-  HardDrive
+  HardDrive,
+  Shuffle
 } from 'lucide-react'
 import ModelPreview from '@/components/ModelPreview'
 
@@ -219,41 +220,75 @@ function PreviewImage({ path }: { path: string }) {
   const isVideo = /\.(mp4|webm|mov|mkv|avi)$/i.test(path)
   const is3D = /\.(stl|obj|3mf)$/i.test(path)
 
+  const fetchPreviewWithRetry = async (url: string, maxRetries = 10) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await fetch(url)
+        
+        if (res.ok) {
+          return res.blob().then(blob => URL.createObjectURL(blob))
+        }
+        
+        // 202 Accepted - still processing, retry after delay
+        if (res.status === 202) {
+          const delay = Math.min(500 * attempt, 5000) // Exponential backoff, max 5 seconds
+          await new Promise(resolve => setTimeout(resolve, delay))
+          continue
+        }
+        
+        // Other errors
+        return null
+      } catch (err) {
+        if (attempt === maxRetries) throw err
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+    }
+    return null
+  }
+
   useEffect(() => {
-    setPreviewUrl(null)
-    setError(false)
-    setIsStlFallback(false)
+    if (path) {
+      queueMicrotask(() => {
+        setPreviewUrl(null)
+        setError(false)
+        setIsStlFallback(false)
+      })
+    }
 
     if (isVideo) {
-      setPreviewUrl(`${apiHost}/api/preview?path=${encodeURIComponent(path)}`)
+      queueMicrotask(() => {
+        setPreviewUrl(`${apiHost}/api/preview?path=${encodeURIComponent(path)}`)
+      })
       return
     }
 
     // For direct 3D files, request PNG render immediately
     if (is3D) {
-      setPreviewUrl(`${apiHost}/api/preview?path=${encodeURIComponent(path)}&format=png`)
+      queueMicrotask(() => {
+        setPreviewUrl(`${apiHost}/api/preview?path=${encodeURIComponent(path)}&format=png`)
+      })
       return
     }
 
     // For everything else: attempt normal preview first, then fall back to STL render
     const primaryUrl = `${apiHost}/api/preview?path=${encodeURIComponent(path)}`
-    fetch(primaryUrl)
-      .then(res => {
-        if (res.ok) {
-          return res.blob().then(blob => {
-            setPreviewUrl(URL.createObjectURL(blob))
-          })
+    
+    fetchPreviewWithRetry(primaryUrl)
+      .then(blobUrl => {
+        if (blobUrl) {
+          setPreviewUrl(blobUrl)
+          return
         }
+        
         // Primary failed — try STL render fallback
         const stlUrl = `${apiHost}/api/preview?path=${encodeURIComponent(path)}&type=model&format=png`
-        return fetch(stlUrl).then(res2 => {
-          if (res2.ok) {
-            return res2.blob().then(blob => {
-              setIsStlFallback(true)
-              setPreviewUrl(URL.createObjectURL(blob))
-            })
+        return fetchPreviewWithRetry(stlUrl).then(blobUrl2 => {
+          if (blobUrl2) {
+            setIsStlFallback(true)
+            setPreviewUrl(blobUrl2)
+          } else {
+            throw new Error('No preview available')
           }
-          throw new Error('No preview available')
         })
       })
       .catch(() => setError(true))
@@ -481,7 +516,8 @@ export default function Dashboard() {
   const [isEditingPage, setIsEditingPage] = useState(false)
   const [tempPage, setTempPage] = useState('')
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system')
-  const [sizeSortOrder, setSizeSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [sortMode, setSortMode] = useState<'size' | 'date' | 'name'>('size')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
 
   // Theme Logic
   useEffect(() => {
@@ -575,6 +611,25 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [mounted, fetchData])
 
+  // Helper function to get sort key from a group based on sortMode
+  const getGroupSortKey = (group: SizeGroup | SimilarityGroup, mode: 'size' | 'date' | 'name'): string | number | null => {
+    if (!group.files || group.files.length === 0) return null
+    
+    // Use first file for sorting the group
+    const firstFile = group.files[0]
+    
+    switch (mode) {
+      case 'size':
+        return 'size' in group ? group.size : firstFile.size
+      case 'date':
+        return new Date(firstFile.mod_time).getTime()
+      case 'name':
+        return firstFile.name.toLowerCase()
+      default:
+        return 0
+    }
+  }
+
   const filteredSizeGroups = useMemo(() => {
     if (!data?.size_groups) return []
     const query = searchQuery.toLowerCase()
@@ -588,9 +643,21 @@ export default function Dashboard() {
     }) || []
 
     return filtered.sort((a, b) => {
-      return sizeSortOrder === 'desc' ? b.size - a.size : a.size - b.size
+      const keyA = getGroupSortKey(a, sortMode)
+      const keyB = getGroupSortKey(b, sortMode)
+      
+      if (keyA === null || keyB === null) return 0
+      
+      let comparison = 0
+      if (typeof keyA === 'string') {
+        comparison = keyA.localeCompare(keyB as string)
+      } else {
+        comparison = (keyA as number) - (keyB as number)
+      }
+      
+      return sortOrder === 'desc' ? -comparison : comparison
     })
-  }, [data?.size_groups, searchQuery, fileType, sizeSortOrder])
+  }, [data?.size_groups, searchQuery, fileType, sortMode, sortOrder])
 
   const filteredSimilarGroups = useMemo(() => {
     if (!data?.similar_groups) return []
@@ -601,7 +668,7 @@ export default function Dashboard() {
       ? data.similar_groups.slice(0, 5000)
       : data.similar_groups
 
-    return list.filter(group => {
+    const filtered = list.filter(group => {
       // Check if ANY file in the group matches
       return group.files.some(f => {
         const name = (f?.name || '').toLowerCase()
@@ -610,7 +677,23 @@ export default function Dashboard() {
         return matchesSearch && matchesType
       })
     }) || []
-  }, [data?.similar_groups, searchQuery, fileType])
+
+    return filtered.sort((a, b) => {
+      const keyA = getGroupSortKey(a, sortMode)
+      const keyB = getGroupSortKey(b, sortMode)
+      
+      if (keyA === null || keyB === null) return 0
+      
+      let comparison = 0
+      if (typeof keyA === 'string') {
+        comparison = keyA.localeCompare(keyB as string)
+      } else {
+        comparison = (keyA as number) - (keyB as number)
+      }
+      
+      return sortOrder === 'desc' ? -comparison : comparison
+    })
+  }, [data?.similar_groups, searchQuery, fileType, sortMode, sortOrder])
 
   const currentItems = useMemo(() => {
     if (viewMode === 'size') return filteredSizeGroups || []
@@ -619,7 +702,7 @@ export default function Dashboard() {
     // Visual Matching Filtering (similar to similarity groups)
     if (!data?.visual_groups) return []
     const query = searchQuery.toLowerCase()
-    return data.visual_groups.filter(group => {
+    const filtered = data.visual_groups.filter(group => {
       return group.files.some(f => {
         const name = (f?.name || '').toLowerCase()
         const matchesSearch = name.includes(query)
@@ -627,7 +710,23 @@ export default function Dashboard() {
         return matchesSearch && matchesType
       })
     }) || []
-  }, [viewMode, filteredSizeGroups, filteredSimilarGroups, data?.visual_groups, searchQuery, fileType])
+
+    return filtered.sort((a, b) => {
+      const keyA = getGroupSortKey(a, sortMode)
+      const keyB = getGroupSortKey(b, sortMode)
+      
+      if (keyA === null || keyB === null) return 0
+      
+      let comparison = 0
+      if (typeof keyA === 'string') {
+        comparison = keyA.localeCompare(keyB as string)
+      } else {
+        comparison = (keyA as number) - (keyB as number)
+      }
+      
+      return sortOrder === 'desc' ? -comparison : comparison
+    })
+  }, [viewMode, filteredSizeGroups, filteredSimilarGroups, data?.visual_groups, searchQuery, fileType, sortMode, sortOrder])
 
   const paginatedItems = useMemo(() =>
     currentItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
@@ -735,14 +834,19 @@ export default function Dashboard() {
       const res = await fetch(`${apiHost}/api/config`)
       const cfg = await res.json()
       cfg.cache_limit_gb = limit
-      await fetch(`${apiHost}/api/config`, {
+      const saveRes = await fetch(`${apiHost}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cfg)
       })
+      if (!saveRes.ok) {
+        const detail = await saveRes.text().catch(() => '')
+        throw new Error(detail || `Save failed (HTTP ${saveRes.status})`)
+      }
       fetchCacheStats()
     } catch (err) {
       console.error("Failed to update cache limit:", err)
+      alert("Failed to save cache limit: " + (err instanceof Error ? err.message : String(err)))
     }
   }
   const handleStartScan = async (config: AppConfig) => {
@@ -750,11 +854,15 @@ export default function Dashboard() {
     const apiHost = window.location.port === '3000' ? 'http://localhost:8080' : ''
     try {
       // 1. Save Config
-      await fetch(`${apiHost}/api/config`, {
+      const saveRes = await fetch(`${apiHost}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)
       })
+      if (!saveRes.ok) {
+        const detail = await saveRes.text().catch(() => '')
+        throw new Error(`Could not save settings: ${detail || `HTTP ${saveRes.status}`}`)
+      }
       // 2. Start Scan
       await fetch(`${apiHost}/api/start-scan`, { method: 'POST' })
       fetchData()
@@ -850,6 +958,12 @@ export default function Dashboard() {
                   Gallery View
                 </button>
               </Link>
+              <Link href="/random">
+                <button className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 rounded-2xl text-sm font-bold text-white transition-all border border-purple-500/20 shadow-lg shadow-purple-500/20 flex items-center gap-2">
+                  <Shuffle className="w-5 h-5" />
+                  Random Duplicate
+                </button>
+              </Link>
               <button
                 onClick={requestNotificationPermission}
                 className="px-6 py-3 bg-glass-layer hover:bg-glass-border rounded-2xl text-sm font-medium text-gray-500 dark:text-gray-400 transition-all border border-glass-border"
@@ -879,15 +993,48 @@ export default function Dashboard() {
             />
           </div>
 
-          {viewMode === 'size' && (
+          {/* Sort Controls */}
+          <div className="flex gap-2 bg-glass-layer p-1.5 rounded-3xl border border-glass-border">
+            <div className="flex gap-1 px-1">
+              <button
+                onClick={() => setSortMode('size')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap ${sortMode === 'size'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                  }`}
+                title="Sort by file size"
+              >
+                Size
+              </button>
+              <button
+                onClick={() => setSortMode('date')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap ${sortMode === 'date'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                  }`}
+                title="Sort by modification date"
+              >
+                Date
+              </button>
+              <button
+                onClick={() => setSortMode('name')}
+                className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap ${sortMode === 'name'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                  }`}
+                title="Sort by filename"
+              >
+                Name
+              </button>
+            </div>
             <button
-              onClick={() => setSizeSortOrder(current => current === 'desc' ? 'asc' : 'desc')}
-              className="p-5 bg-glass-layer hover:bg-glass-border border border-glass-border rounded-3xl transition-all text-gray-400 hover:text-foreground flex items-center gap-2"
-              title={`Sort by Size: ${sizeSortOrder === 'desc' ? 'Descending' : 'Ascending'}`}
+              onClick={() => setSortOrder(current => current === 'desc' ? 'asc' : 'desc')}
+              className="p-2 bg-glass-border rounded-lg text-gray-400 hover:text-foreground transition-all flex items-center gap-1 ml-1"
+              title={`Order: ${sortOrder === 'desc' ? 'Descending' : 'Ascending'}`}
             >
-              {sizeSortOrder === 'desc' ? <ArrowDown01 className="w-6 h-6" /> : <ArrowUp01 className="w-6 h-6" />}
+              {sortOrder === 'desc' ? <ArrowDown01 className="w-4 h-4" /> : <ArrowUp01 className="w-4 h-4" />}
             </button>
-          )}
+          </div>
 
           <div className="flex flex-wrap gap-3 items-center w-full justify-between">
             <div className="flex gap-2 bg-glass-layer p-1.5 rounded-3xl flex-grow sm:flex-grow-0">

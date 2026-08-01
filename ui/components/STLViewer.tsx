@@ -103,32 +103,30 @@ function Model({ url, fileName }: { url: string, fileName?: string }) {
 }
 
 export default function STLViewer({ url, fileName }: { url: string, fileName?: string }) {
-    const [modelUrl, setModelUrl] = useState<string>('')
+    const [modelUrl, setModelUrl] = useState<string>(() => (url.startsWith('blob:') ? url : ''))
 
     useEffect(() => {
-        // If the URL is a blob, use it directly
-        // Otherwise, fetch it and create a blob URL
-        if (url.startsWith('blob:')) {
-            setModelUrl(url)
-        } else {
-            fetch(url)
-                .then(res => res.blob())
-                .then(blob => {
-                    const blobUrl = URL.createObjectURL(blob)
-                    setModelUrl(blobUrl)
-                    return blobUrl
-                })
-                .catch(err => {
-                    console.error('Failed to fetch model:', err)
-                })
-        }
+        if (url.startsWith('blob:')) return
+
+        let cancelled = false
+        fetch(url)
+            .then(res => res.blob())
+            .then(blob => {
+                if (cancelled) return
+                const blobUrl = URL.createObjectURL(blob)
+                setModelUrl(blobUrl)
+            })
+            .catch(err => {
+                if (!cancelled) console.error('Failed to fetch model:', err)
+            })
 
         return () => {
+            cancelled = true
             if (modelUrl && modelUrl.startsWith('blob:')) {
                 URL.revokeObjectURL(modelUrl)
             }
         }
-    }, [url])
+    }, [url, modelUrl])
 
     if (!modelUrl) {
         return (
